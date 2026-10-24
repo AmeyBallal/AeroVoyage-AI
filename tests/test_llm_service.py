@@ -7,6 +7,7 @@ from src.services.llm_service import (
     parse_intent_with_llm,
     synthesize_travel_brief_with_llm,
     answer_travel_qa_with_llm,
+    route_and_reason_query,
 )
 from src.services.travel_engine import parse_intent_from_text
 
@@ -64,6 +65,26 @@ class TestLLMService(unittest.TestCase):
         with patch.dict("os.environ", {"GROQ_API_KEY": "gsk_test123"}):
             answer = answer_travel_qa_with_llm("Do I need border control from Zurich to Milan?")
             self.assertIn("Zurich and Milan", answer)
+
+    @patch("requests.post")
+    def test_route_and_reason_query(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "choices": [
+                {
+                    "message": {
+                        "content": '{"intent": "conversational_qa", "reply": "Schengen rules allow travel between Zurich and Milan without border control."}'
+                    }
+                }
+            ]
+        }
+        mock_post.return_value = mock_resp
+
+        with patch.dict("os.environ", {"GROQ_API_KEY": "gsk_test123"}):
+            decision = route_and_reason_query("Can I travel between Zurich and Milan?")
+            self.assertEqual(decision["intent"], "conversational_qa")
+            self.assertIn("Schengen rules", decision["reply"])
 
     def test_travel_engine_fallback_when_no_groq(self):
         # Even without Groq, travel engine extracts intent deterministically

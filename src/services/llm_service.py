@@ -18,12 +18,14 @@ import requests
 
 logger = logging.getLogger("AeroVoyage.LLM")
 
-# Supported Free Tier Models on Groq
+# Supported Free Tier Models on Groq (prioritizing active models on user account)
 FREE_TIER_MODELS = [
-    os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
+    os.getenv("GROQ_MODEL", "qwen/qwen3.8-27b"),
+    "qwen/qwen3.8-27b",
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
+    "llama-3.3-70b-versatile",
     "llama-3.1-8b-instant",
-    "llama-3.2-3b-preview",
-    "llama-3.2-1b-preview",
 ]
 GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
 
@@ -83,6 +85,42 @@ def _call_groq(
             logger.warning(f"Groq call failed for {cand}: {exc}")
 
     return None
+
+
+def route_and_reason_query(user_text: str) -> Optional[Dict[str, Any]]:
+    """Primary LLM Orchestrator:
+    Autonomously reasons over user input to decide between:
+    1. Conversational Q&A / Travel Advisory (visas, baggage, FET payments, weather questions)
+    2. Real-time Itinerary Search & Booking (triggering multi-agent logistics & card rendering)
+    """
+    if not is_groq_available():
+        return None
+
+    router_prompt = (
+        "You are AeroVoyage AI, the autonomous Travel & Logistics Concierge on ASI:One.\n"
+        "Analyze the user message:\n"
+        "- If the user asks a general question (such as travel advice, visas, baggage, "
+        "how Fetch.ai escrow works, FET payments, greetings, capabilities), output JSON:\n"
+        '{"intent": "conversational_qa", "reply": "<your 1-2 paragraph authoritative answer as AeroVoyage Concierge>"}\n'
+        "- If the user wants to search, plan, compare, or book an itinerary/flight/hotel (e.g. 'plan a trip to Berlin', 'find flights to London', '5-day trip across Berlin, Zurich, Milan'), output JSON:\n"
+        '{"intent": "plan_itinerary", "cities": ["City1", ...], "days": <int>, "budget": <float>, "is_business": <bool>, "meeting_focus": "<str>"}\n'
+        "Always output valid JSON only."
+    )
+
+    messages = [
+        {"role": "system", "content": router_prompt},
+        {"role": "user", "content": user_text},
+    ]
+
+    raw = _call_groq(messages, json_mode=True, temperature=0.1, timeout=8.0)
+    if not raw:
+        return None
+
+    try:
+        return json.loads(raw)
+    except Exception as exc:
+        logger.warning(f"Error parsing LLM router decision: {exc}")
+        return None
 
 
 def parse_intent_with_llm(user_text: str) -> Optional[Dict[str, Any]]:

@@ -174,10 +174,12 @@ def get_city_weather(city_name: str) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODELS = [
-    os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
+    os.getenv("GROQ_MODEL", "qwen/qwen3.8-27b"),
+    "qwen/qwen3.8-27b",
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
+    "llama-3.3-70b-versatile",
     "llama-3.1-8b-instant",
-    "llama-3.2-3b-preview",
-    "llama-3.2-1b-preview",
 ]
 
 
@@ -703,19 +705,74 @@ async def handle_chat(ctx: Context, sender: str, msg: ChatMessage):
                 except Exception:
                     pass
 
-            # Check if this is a general conversational Q&A (not a trip planning query)
-            lower_query = user_text.lower()
-            is_trip_query = any(k in lower_query for k in ("plan", "trip", "travel", "flight", "hotel", "visit", "across", "book", "itinerary", "go to", "days", "fly", "train", "route")) or any(c.lower() in lower_query for c in KNOWN_CITIES)
-            
-            if not is_trip_query:
-                llm_answer = call_groq_llm([
-                    {"role": "system", "content": "You are AeroVoyage AI, the autonomous Travel Concierge on ASI:One. Answer the user's travel, logistics, or Fetch.ai payment question concisely (1-2 short paragraphs) with helpful, authoritative advice. If they want to plan a journey, invite them to state their destination."},
-                    {"role": "user", "content": user_text},
-                ], timeout=5.0)
-                if llm_answer:
-                    await ctx.send(sender, make_chat(llm_answer))
-                    continue
+            # 2. Primary LLM Autonomous Reasoning (Advisory vs Booking Workflow)
+            if os.getenv("GROQ_API_KEY", "").strip():
+                try:
+                    router_prompt = (
+                        "You are AeroVoyage AI, the autonomous Travel & Logistics Concierge on ASI:One.\n"
+                        "Analyze the user message:\n"
+                        "- If the user asks a general question (such as travel advice, visas, baggage, "
+                        "how Fetch.ai escrow works, FET payments, greetings, capabilities), output JSON:\n"
+                        '{"intent": "conversational_qa", "reply": "<your 1-2 paragraph authoritative answer as AeroVoyage Concierge>"}\n'
+                        "- If the user wants to search, plan, compare, or book an itinerary/flight/hotel (e.g. 'plan a trip to Berlin', 'find flights to London', '5-day trip across Berlin, Zurich, Milan'), output JSON:\n"
+                        '{"intent": "plan_itinerary", "cities": ["City1", ...], "days": <int>, "budget": <float>, "is_business": <bool>, "meeting_focus": "<str>"}\n'
+                        "Always output valid JSON only."
+                    )
+                    llm_decision_raw = call_groq_llm([
+                        {"role": "system", "content": router_prompt},
+                        {"role": "user", "content": user_text},
+                    ], json_mode=True, timeout=8.0)
 
+                    if llm_decision_raw:
+                        decision = json.loads(llm_decision_raw)
+                        if decision.get("intent") == "conversational_qa" and decision.get("reply"):
+                            ctx.logger.info("🧠 [LLM Reasoner] Handled query as conversational travel advisory")
+                            await ctx.send(sender, make_chat(decision["reply"]))
+                            continue
+                        elif decision.get("intent") == "plan_itinerary" and decision.get("cities"):
+                            ctx.logger.info(f"🧠 [LLM Reasoner] Handled query as travel planning for {decision.get('cities')}")
+                            clean_cities = [c.strip().title() for c in decision["cities"] if isinstance(c, str)]
+                            intent = {
+                                "cities": clean_cities,
+                                "is_multi_city": len(clean_cities) > 1,
+                                "days": int(decision.get("days", 3)),
+                                "budget": float(decision.get("budget", 1800.0 if len(clean_cities) > 1 else 1200.0)),
+                                "is_business": bool(decision.get("is_business", True)),
+                                "meeting_focus": decision.get("meeting_focus", "Optimized business transit"),
+                                "llm_enhanced": True,
+                            }
+                            session["intent"] = intent
+                            session["destination"] = " ➔ ".join(clean_cities)
+                            session["budget"] = intent["budget"]
+                            data = build_dynamic_travel_packages(intent)
+                            session["data"] = data
+                            carousel = make_carousel_card(data)
+
+                            llm_summary = call_groq_llm([
+                                {"role": "system", "content": "You are AeroVoyage AI. Write a concise 2-sentence executive summary highlighting fastest connections between meetings, zero-delay weather forecast, and smart escrow security for the requested route."},
+                                {"role": "user", "content": f"Route: {data['route_label']}, Days: {data['days']}, Weather: {data['weather_summary']}"},
+                            ], timeout=4.0)
+
+                            if llm_summary:
+                                header_msg = (
+                                    f"✈️ **AeroVoyage Executive Synthesis for {data['route_label']}**\n\n"
+                                    f"{llm_summary}\n\n"
+                                    f"• **Live Weather Telemetry:** {data['weather_summary']} (Open-Meteo Verified)\n"
+                                    f"• **Meeting Optimization:** Fastest connections between meetings with guaranteed buffers."
+                                )
+                            else:
+                                header_msg = (
+                                    f"Found 3 curated itineraries for **{data['route_label']}** based on your request:\n\n"
+                                    f"• **Live Weather:** {data['weather_summary']} (Open-Meteo Verified)\n"
+                                    f"• **Meeting Optimization:** Fastest connections between meetings with guaranteed buffers."
+                                )
+
+                            await ctx.send(sender, make_chat(header_msg, carousel))
+                            continue
+                except Exception as exc:
+                    ctx.logger.warning(f"LLM reasoner notice: {exc}")
+
+            # 3. Fallback to rule-based engine if LLM is unavailable
             intent = parse_user_intent(user_text)
             session["intent"] = intent
             session["destination"] = " ➔ ".join(intent["cities"])
