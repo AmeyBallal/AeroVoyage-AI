@@ -50,26 +50,36 @@ flowchart TD
 
 ### Agent Directory & Cryptographic Addresses
 
-| Agent Name | Role | Protocol | Deterministic Agent Address | Ledger Wallet Address (`fetch1...`) |
-| :--- | :--- | :--- | :--- | :--- |
-| **AeroVoyage Concierge** | ASI:One Facing Orchestrator | `chat_protocol_spec` (ACP) | `agent1qg5gewzgdj9mxvxrk2x6hw4kh0u5upxvascpc0ql4x9centpvhmv2un4xv5` | `fetch1k7s0qg437e9z9q4e9...` |
-| **Logistics Intelligence** | Real-Time Telemetry & Scoring | Inter-Agent Query Protocol | `agent1qtjcn0xkt4nna7xwg7cyu09eqpt22kwcys2umcmpeu0ctkktv0zrxdqkgck` | `fetch18p7q6d9...` |
-| **Settlement & Escrow** | Escrow Lock & Monetization | `payment_protocol_spec` (Seller) | `agent1qfxpj3zrsfgl58deya9vrnc4hptccmz5v6rt3z8qgdcg8jzlxc4gjfzpu6l` | `fetch15a0xsau6vx8xks7k4k4mrquyz44t86vzs2g372` |
-| **Standalone Concierge** | Single-file Agentverse Cloud Agent | `chat_protocol_spec` (ACP) | `agent1qdaxwrdn82n4ut3dag2ftltrqhne9ux2mvf9hgxwahw93zcm04na7wmdgh9` | `fetch17e4xd3eex6gvpldd9xceur3tlzh598g7l9fwlw` |
+| Agent Name | Role | Protocol | Deterministic Agent Address | Ledger Wallet Address (`fetch1...`) | Live Explorer Link |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **AeroVoyage Concierge** | ASI:One Facing Orchestrator | `chat_protocol_spec` (ACP) | `agent1qg5gewzgdj9mxvxrk2x6hw4kh0u5upxvascpc0ql4x9centpvhmv2un4xv5` | `fetch1k7s0qg437e9z9q4e9...` | [Explore Address](https://explore-dorado.fetch.ai/) |
+| **Logistics Intelligence** | Real-Time Telemetry & Scoring | Inter-Agent Query Protocol | `agent1qtjcn0xkt4nna7xwg7cyu09eqpt22kwcys2umcmpeu0ctkktv0zrxdqkgck` | `fetch18p7q6d9...` | [Explore Address](https://explore-dorado.fetch.ai/) |
+| **Settlement & Escrow** | Escrow Lock & Monetization | `payment_protocol_spec` (Seller) | `agent1qfxpj3zrsfgl58deya9vrnc4hptccmz5v6rt3z8qgdcg8jzlxc4gjfzpu6l` | `fetch15a0xsau6vx8xks7k4k4mrquyz44t86vzs2g372` | [Dorado Account View](https://explore-dorado.fetch.ai/accounts/fetch15a0xsau6vx8xks7k4k4mrquyz44t86vzs2g372) |
+| **Standalone Concierge** | Single-file Agentverse Cloud Agent | `chat_protocol_spec` (ACP) | `agent1qdaxwrdn82n4ut3dag2ftltrqhne9ux2mvf9hgxwahw93zcm04na7wmdgh9` | `fetch17e4xd3eex6gvpldd9xceur3tlzh598g7l9fwlw` | [Agentverse Inspector](https://agentverse.ai/inspect/?uri=http%3A//127.0.0.1%3A8000&address=agent1qdaxwrdn82n4ut3dag2ftltrqhne9ux2mvf9hgxwahw93zcm04na7wmdgh9) |
 
 ---
 
 ## 3. Key Features & Judging Criteria Highlights
 
 ### 1. Functionality & Technical Implementation (25%)
-- **Multi-Step Autonomous Planning:** Progresses through `INIT` ➔ `PREFERENCES_COLLECTED` ➔ `SEARCHING` ➔ `OPTIONS_PRESENTED` ➔ `DETAIL_VIEW` ➔ `ESCROW_AUTHORIZATION` ➔ `BOOKED`.
-- **Zero-Downtime Resilience:** Every external service (Open-Meteo, CoinGecko) includes automated exception handling and resilient fallback telemetry.
-- **100% Test Coverage:** Complete unit and integration test suite (`tests/`) simulating end-to-end ASI:One workflows.
+- **Multi-Step Autonomous Planning:** Progresses through `INIT` ➔ `CONTEXT_GATHERING` ➔ `SEARCHING` ➔ `OPTIONS_PRESENTED` ➔ `DETAIL_VIEW` ➔ `ESCROW_AUTHORIZATION` ➔ `BOOKED`.
+- **Intelligent Context Clarification:** If a query lacks key details (e.g. *"Plan a trip to San Francisco"*), the agent proactively asks for the 4 essential travel parameters:
+  1. 📍 **Departure Origin / Where you live**
+  2. 🎯 **Destination City / Cities**
+  3. 📅 **Travel Timing / Dates / Duration**
+  4. 💰 **Target Budget (USD or FET)**
+  and delivers an interactive **Travel Parameters Form Card**.
+- **Zero-Downtime Resilience:** Every external service (Open-Meteo, CoinGecko) includes automated exception handling, TTL in-memory rate-limit caching, and resilient fallback telemetry.
+- **100% Test Coverage:** Complete unit, integration, and E2E simulation test suite (`tests/`) with 26 passing tests.
 
 ### 2. Use of Fetch.ai Technology (20%)
 - **Agent Chat Protocol (ACP):** Implements `chat_protocol_spec` from `uagents_core.contrib.protocols.chat`.
 - **Agentverse Registration:** Manifest publishing (`publish_manifest=True`) enables automatic indexing on Agentverse and routing by ASI:One.
 - **Fetch.ai Payment Protocol:** Native seller-side implementation of `payment_protocol_spec` handling `CommitPayment`, `CompletePayment`, and micro-FET agent fees.
+- **On-Chain Testnet Settlement:** Uses CosmPy and the Fetch.ai Dorado testnet ledger client to broadcast real on-chain token transfers to the Settlement Agent payee wallet.
+  - **Settlement Wallet:** `fetch15a0xsau6vx8xks7k4k4mrquyz44t86vzs2g372` ([Dorado Explorer](https://explore-dorado.fetch.ai/accounts/fetch15a0xsau6vx8xks7k4k4mrquyz44t86vzs2g372))
+  - **Verified On-Chain Tx 1:** [`DF98B144252FD820E7E7320D1A1657BF1D04AF8F2FBEA6072DBFC230C24799B6`](https://explore-dorado.fetch.ai/transactions/DF98B144252FD820E7E7320D1A1657BF1D04AF8F2FBEA6072DBFC230C24799B6)
+  - **Verified On-Chain Tx 2:** [`4F9521EC10589215ECB1FE505E7A0B035D4B27E1D1C77A5AEC01202197E71FA2`](https://explore-dorado.fetch.ai/transactions/4F9521EC10589215ECB1FE505E7A0B035D4B27E1D1C77A5AEC01202197E71FA2)
 - **uAgents Bureau:** Simultaneous multi-agent co-location and local address routing via `Bureau(port=8000)`.
 
 ### 3. Native ASI:One Interactive Cards (Bonus Points)
@@ -104,7 +114,7 @@ flowchart TD
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/your-username/AeroVoyage-AI.git
+git clone https://github.com/AmeyBallal/AeroVoyage-AI.git
 cd AeroVoyage-AI
 
 # 2. Create and activate a Python 3.11 virtual environment
@@ -146,13 +156,24 @@ python -m unittest discover -s tests -p "test_*.py"
 
 Output:
 ```text
-Ran 19 tests in 65s
+Ran 26 tests in ~58s
 OK (100% Pass Rate)
 ```
 
 ---
 
-## 6. Testing Directly inside ASI:One
+## 6. Hackathon Deliverables & Demo Resources
+
+- 🎬 **Video Walkthrough Script:** [DEMO_SCRIPT.md](file:///C:/Users/Amey%20Ballal/OneDrive/Desktop/Fetch-A-Thon/DEMO_SCRIPT.md) — Turnkey 3-minute video presentation guide with word-for-word voiceover, exact screen-recording timestamps, and live demo choreography.
+- 📋 **Project Submission Agent Guide:** [SUBMISSION.md](file:///C:/Users/Amey%20Ballal/OneDrive/Desktop/Fetch-A-Thon/SUBMISSION.md) — Complete copy-paste fields tailored for the Fetch-A-Thon 3.0 submission portal.
+- 🔗 **Verified On-Chain Escrow Transfers:**
+  - Tx 1: [`DF98B144252FD820E7E7320D1A1657BF1D04AF8F2FBEA6072DBFC230C24799B6`](https://explore-dorado.fetch.ai/transactions/DF98B144252FD820E7E7320D1A1657BF1D04AF8F2FBEA6072DBFC230C24799B6)
+  - Tx 2: [`4F9521EC10589215ECB1FE505E7A0B035D4B27E1D1C77A5AEC01202197E71FA2`](https://explore-dorado.fetch.ai/transactions/4F9521EC10589215ECB1FE505E7A0B035D4B27E1D1C77A5AEC01202197E71FA2)
+- 💳 **Settlement Agent Ledger Wallet:** [`fetch15a0xsau6vx8xks7k4k4mrquyz44t86vzs2g372`](https://explore-dorado.fetch.ai/accounts/fetch15a0xsau6vx8xks7k4k4mrquyz44t86vzs2g372)
+
+---
+
+## 7. Testing Directly inside ASI:One
 
 1. Log in to [ASI:One](https://asi.one).
 2. Ensure your agent is registered on [Agentverse](https://agentverse.ai) with Mailbox enabled (`mailbox=True`).
@@ -168,7 +189,7 @@ OK (100% Pass Rate)
 
 ---
 
-## 7. Submission Deliverables Checklist
+## 8. Submission Deliverables Checklist
 
 - [x] **Agentverse Registered Profile:** `agent1qg5gewzgdj9mxvxrk2x6hw4kh0u5upxvascpc0ql4x9centpvhmv2un4xv5`
 - [x] **Agent Chat Protocol (ACP):** Implemented with full schema validation (`uagents_core.contrib.protocols.chat`).
@@ -181,6 +202,6 @@ OK (100% Pass Rate)
 
 ---
 
-## 8. License
+## 9. License
 
 Distributed under the Apache 2.0 License. Built with ❤️ for the Fetch.ai and Artificial Superintelligence (ASI) Alliance Ecosystem.
