@@ -51,6 +51,24 @@ class TestServices(unittest.TestCase):
             self.assertIn("metrics", pkg)
             self.assertLessEqual(pkg["metrics"]["price_usd"], 2000.0)
 
+    def test_multi_city_intent_and_routing(self):
+        from src.services.travel_engine import parse_intent_from_text
+        prompt = "Plan a five-day multi-city business trip across Berlin, Zurich, and Milan with the fastest connections between meetings, and show me a summary card of the full itinerary."
+        intent = parse_intent_from_text(prompt)
+        self.assertEqual(intent["cities"], ["Berlin", "Zurich", "Milan"])
+        self.assertEqual(intent["days"], 5)
+        self.assertTrue(intent["is_multi_city"])
+
+        itinerary = generate_itinerary_packages(
+            cities=intent["cities"],
+            days=intent["days"],
+            max_budget_usd=intent["budget"],
+        )
+        self.assertEqual(len(itinerary["packages"]), 3)
+        self.assertIn("Berlin ➔ Zurich ➔ Milan", itinerary["route_label"])
+        self.assertIn("Fastest", itinerary["packages"][0]["title"])
+        self.assertIn("Lufthansa", itinerary["packages"][0]["flight"]["carrier"])
+
 
 if __name__ == "__main__":
     unittest.main()

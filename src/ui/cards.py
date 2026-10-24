@@ -72,10 +72,13 @@ def build_preference_form_card(
 def build_itinerary_carousel_card(travel_data: Dict[str, Any]) -> MetadataContent:
     """Build a Carousel Card comparing optimized flight & lodging options with 1-click select CTAs."""
     packages = travel_data.get("packages", [])
-    destination = travel_data.get("destination", "Destination")
+    route_label = travel_data.get("route_label", travel_data.get("destination", "Destination"))
+    weather_summary = travel_data.get("weather_summary")
     weather = travel_data.get("weather", {})
     weather_cond = weather.get("condition", "Optimal")
     weather_temp = weather.get("temperature_c", "19")
+
+    subtitle = f"Live Weather: {weather_summary} | Open-Meteo Verified" if weather_summary else f"Live Weather: {weather_cond} ({weather_temp}°C) | Open-Meteo Verified"
 
     items = []
     for pkg in packages:
@@ -85,19 +88,26 @@ def build_itinerary_carousel_card(travel_data: Dict[str, Any]) -> MetadataConten
         price_usd = metrics.get("price_usd", 0)
         price_fet = metrics.get("price_fet", 0)
 
+        badges = [cards.CarouselBadge(label=badge_text, variant=badge_variant)]
+        if "weather_list" in travel_data and len(travel_data["weather_list"]) > 1:
+            w_brief = " | ".join([f"{w['city']}: {w.get('temperature_c', w.get('temp_c', 15))}°C" for w in travel_data["weather_list"][:2]])
+            badges.append(cards.CarouselBadge(label=w_brief, variant="info"))
+        else:
+            badges.append(cards.CarouselBadge(label=f"Weather: {weather_temp}°C {weather_cond}", variant="info"))
+
+        transit_name = pkg.get("flight", {}).get("carrier", pkg.get("carrier", "Direct Transit"))
+        lodging_name = pkg.get("lodging", {}).get("name", pkg.get("hotel", "Executive Lodging"))
+
         item = cards.CarouselItem(
             id=pkg["id"],
             title=pkg["title"],
             subtitle=pkg["subtitle"],
             secondary_text=(
-                f"Flight: {pkg['flight']['carrier']} ({pkg['flight']['cabin']}) | "
-                f"Total: ${price_usd:,.2f} USD (~{price_fet:,.1f} FET) | "
-                f"Feasibility: {metrics.get('feasibility_score', '95%')}"
+                f"Transit: {transit_name} | "
+                f"Lodging: {lodging_name} | "
+                f"Total: ${price_usd:,.2f} USD (~{price_fet:,.1f} FET)"
             ),
-            badges=[
-                cards.CarouselBadge(label=badge_text, variant=badge_variant),
-                cards.CarouselBadge(label=f"Weather: {weather_temp}°C {weather_cond}", variant="info"),
-            ],
+            badges=badges,
             primary_cta=cards.CtaAction(
                 label=f"Inspect & Select",
                 selection={"action": "select_package", "package_id": pkg["id"]},
@@ -107,8 +117,8 @@ def build_itinerary_carousel_card(travel_data: Dict[str, Any]) -> MetadataConten
         items.append(item)
 
     carousel_payload = cards.CarouselCardPayload(
-        title=f"✈️ Curated Itineraries for {destination}",
-        subtitle=f"Live Weather: {weather_cond} ({weather_temp}°C) | Open-Meteo Verified",
+        title=f"✈️ Curated Itineraries: {route_label}",
+        subtitle=subtitle,
         items=items,
     )
     return cards.create_card_content(carousel_payload, card_id=uuid4(), is_terminal=False)

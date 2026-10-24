@@ -47,7 +47,37 @@ def get_city_coords(city_name: str) -> Optional[Dict[str, float]]:
 
 
 def fetch_weather(city_name: str) -> Dict[str, Any]:
-    """Fetch live real-time weather from Open-Meteo with fallback resilience."""
+    """Fetch live real-time weather from Open-Meteo with geocoding and fallback resilience."""
+    try:
+        geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={city_name}&count=1"
+        geo_res = requests.get(geo_url, timeout=2.5).json()
+        if "results" in geo_res and len(geo_res["results"]) > 0:
+            lat = geo_res["results"][0]["latitude"]
+            lon = geo_res["results"][0]["longitude"]
+            url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,precipitation,weather_code,wind_speed_10m"
+            response = requests.get(url, timeout=2.5)
+            if response.status_code == 200:
+                data = response.json()
+                current = data.get("current", {})
+                temp = current.get("temperature_2m", 16.0)
+                precip = current.get("precipitation", 0.0)
+                code = current.get("weather_code", 0)
+                wind = current.get("wind_speed_10m", 10.0)
+                condition = WMO_WEATHER_MAP.get(code, "Clear")
+                stability = "Optimal (Zero Delay Forecast)" if precip < 5.0 and wind < 35.0 else "Moderate Precaution"
+                return {
+                    "city": city_name.title(),
+                    "temperature_c": temp,
+                    "temperature_f": round(temp * 9 / 5 + 32, 1),
+                    "condition": condition,
+                    "precipitation_mm": precip,
+                    "wind_kmh": wind,
+                    "stability": stability,
+                    "source": "Open-Meteo Live API",
+                }
+    except Exception as exc:
+        logger.warning(f"Live weather API lookup error ({exc}). Employing cached telemetry.")
+
     coords = get_city_coords(city_name)
     lat, lon = coords["lat"], coords["lon"]
     url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,precipitation,weather_code,wind_speed_10m"

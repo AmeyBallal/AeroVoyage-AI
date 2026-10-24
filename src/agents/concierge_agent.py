@@ -37,7 +37,7 @@ from src.protocols.internal_protocols import (
     SettlementInitiateRequest,
     SettlementConfirmedResponse,
 )
-from src.services.travel_engine import generate_itinerary_packages
+from src.services.travel_engine import generate_itinerary_packages, parse_intent_from_text
 from src.services.weather_service import fetch_weather
 from src.ui.cards import (
     build_preference_form_card,
@@ -310,20 +310,13 @@ async def handle_user_text_intent(
         await ctx.send(sender, create_chat_message(info_text, form_card))
         return
 
-    # Intent B: Parse destination extraction (e.g., "trip to London", "fly to San Francisco")
-    for city in ("san francisco", "sfo", "london", "lhr", "tokyo", "new york", "nyc", "paris", "dubai", "singapore", "berlin"):
-        if city in lower_text:
-            session["destination"] = city.title()
-            break
-
-    # Intent C: Budget detection (e.g. "under $1200", "$2000 budget")
-    import re
-    budget_match = re.search(r"\$?(\d{3,5})", lower_text)
-    if budget_match:
-        try:
-            session["budget"] = float(budget_match.group(1))
-        except ValueError:
-            pass
+    # Intent B: Parse destination and multi-city route extraction
+    intent = parse_intent_from_text(user_text)
+    session["intent"] = intent
+    session["destination"] = " ➔ ".join(intent["cities"])
+    session["budget"] = intent["budget"]
+    session["days"] = intent["days"]
+    session["cities"] = intent["cities"]
 
     # Execute search with identified parameters
     await execute_itinerary_search(ctx, sender, session)
@@ -360,6 +353,8 @@ async def execute_itinerary_search(ctx: Context, sender: str, session: Dict[str,
             departure_date=session["departure_date"],
             return_date=session["return_date"],
             max_budget_usd=session["budget"],
+            cities=session.get("cities"),
+            days=session.get("days", 3),
         )
         await handle_itinerary_results(ctx, sender, session, data)
 
@@ -373,14 +368,17 @@ async def handle_itinerary_results(
     session["last_travel_data"] = data
     session["state"] = "OPTIONS_PRESENTED"
 
-    weather = data.get("weather", {})
-    weather_desc = f"{weather.get('condition', 'Optimal')} ({weather.get('temperature_c', 19)}°C)"
+    weather_desc = data.get("weather_summary")
+    if not weather_desc:
+        weather = data.get("weather", {})
+        weather_desc = f"{weather.get('condition', 'Optimal')} ({weather.get('temperature_c', 19)}°C)"
 
     carousel_card = build_itinerary_carousel_card(data)
+    route_display = data.get("route_label", session["destination"])
     response_text = (
-        f"🎯 **Found 3 Curated Itineraries for {session['destination']}**\n\n"
+        f"🎯 **Found 3 Curated Itineraries for {route_display}**\n\n"
         f"• **Live Destination Weather:** {weather_desc} (Open-Meteo Verified)\n"
-        f"• **Flight Window:** {weather.get('stability', 'Optimal')}\n\n"
+        f"• **Routing Optimization:** Fastest connections between meetings with guaranteed buffers.\n\n"
         f"Use the interactive carousel below to inspect details and choose your preferred package:"
     )
     await ctx.send(sender, create_chat_message(response_text, carousel_card))
