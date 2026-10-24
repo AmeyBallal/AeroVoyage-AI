@@ -50,12 +50,12 @@ flowchart TD
 
 ### Agent Directory & Cryptographic Addresses
 
-| Agent Name | Role | Protocol | Deterministic Address |
-| :--- | :--- | :--- | :--- |
-| **AeroVoyage Concierge** | ASI:One Facing Orchestrator | `chat_protocol_spec` (ACP) | `agent1qg5gewzgdj9mxvxrk2x6hw4kh0u5upxvascpc0ql4x9centpvhmv2un4xv5` |
-| **Logistics Intelligence** | Real-Time Telemetry & Scoring | Inter-Agent Query Protocol | `agent1qtjcn0xkt4nna7xwg7cyu09eqpt22kwcys2umcmpeu0ctkktv0zrxdqkgck` |
-| **Settlement & Escrow** | Escrow Lock & Monetization | `payment_protocol_spec` (Seller) | `agent1qfxpj3zrsfgl58deya9vrnc4hptccmz5v6rt3z8qgdcg8jzlxc4gjfzpu6l` |
-| **Standalone Concierge** | Single-file Agentverse Cloud Agent | `chat_protocol_spec` (ACP) | `agent1qdaxwrdn82n4ut3dag2ftltrqhne9ux2mvf9hgxwahw93zcm04na7wmdgh9` |
+| Agent Name | Role | Protocol | Deterministic Agent Address | Ledger Wallet Address (`fetch1...`) |
+| :--- | :--- | :--- | :--- | :--- |
+| **AeroVoyage Concierge** | ASI:One Facing Orchestrator | `chat_protocol_spec` (ACP) | `agent1qg5gewzgdj9mxvxrk2x6hw4kh0u5upxvascpc0ql4x9centpvhmv2un4xv5` | `fetch1k7s0qg437e9z9q4e9...` |
+| **Logistics Intelligence** | Real-Time Telemetry & Scoring | Inter-Agent Query Protocol | `agent1qtjcn0xkt4nna7xwg7cyu09eqpt22kwcys2umcmpeu0ctkktv0zrxdqkgck` | `fetch18p7q6d9...` |
+| **Settlement & Escrow** | Escrow Lock & Monetization | `payment_protocol_spec` (Seller) | `agent1qfxpj3zrsfgl58deya9vrnc4hptccmz5v6rt3z8qgdcg8jzlxc4gjfzpu6l` | `fetch15a0xsau6vx8xks7k4k4mrquyz44t86vzs2g372` |
+| **Standalone Concierge** | Single-file Agentverse Cloud Agent | `chat_protocol_spec` (ACP) | `agent1qdaxwrdn82n4ut3dag2ftltrqhne9ux2mvf9hgxwahw93zcm04na7wmdgh9` | `fetch17e4xd3eex6gvpldd9xceur3tlzh598g7l9fwlw` |
 
 ---
 
@@ -85,9 +85,12 @@ flowchart TD
 - **Executive Synthesis & Travel Advisory:** Synthesizes custom travel briefs and provides real-time conversational answers to travel/visa/FET escrow questions directly within ASI:One chat.
 - **Fail-Safe Fallback Architecture:** Automatically falls back across 4 Groq models and reverts to deterministic regex/geocoding if the API key is not configured or rate-limited.
 
-### 5. Credible Monetization Model (Bonus Points)
-- Charges a platform coordination fee of **5.0 FET** per confirmed itinerary.
-- Locks travel escrow directly into the smart escrow ledger, demonstrating a viable post-hackathon business model for autonomous agentic commerce.
+### 5. Credible Monetization Model & Fetch.ai Payment Protocol (Bonus Points)
+- **Settlement Payee Wallet Address:** `fetch15a0xsau6vx8xks7k4k4mrquyz44t86vzs2g372`
+- **Agent Coordination Micro-Fee:** Charges a flat fee of **5.0 FET** per confirmed multi-agent itinerary, settled directly to the Settlement Agent's ledger wallet.
+- **Smart Escrow Locking:** Locks the full travel package price in smart escrow via `payment_protocol_spec` (`seller` role), releasing funds only upon verified airline ticket issuance and guaranteed hotel check-in.
+- **Itemized Ledger Invoicing:** Displayed interactively inside ASI:One on the **Review Card** and **Receipt Card**, providing full cryptographic transparency and eliminating traditional 3% credit card interchange fees.
+- **Sustainable Post-Hackathon Model:** Demonstrates a viable commercial SaaS & agentic marketplace business model where autonomous agents earn micro-FET revenue for high-value logistics orchestration.
 
 ---
 

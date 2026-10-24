@@ -8,6 +8,7 @@ Builds standardized cards conforming to Fetch.ai Agentverse & ASI:One card specs
 - Payment/Confirmation Card: Cryptographic transaction confirmation
 """
 
+import os
 from uuid import uuid4
 from typing import Dict, Any, Optional
 from uagents_core.contrib.protocols.chat import (
@@ -182,10 +183,12 @@ def build_booking_review_card(
     price_fet = metrics.get("price_fet", 0.0)
     total_fet = round(price_fet + fee_fet, 2)
 
+    wallet_addr = os.getenv("SETTLEMENT_WALLET_ADDRESS", "fetch15a0xsau6vx8xks7k4k4mrquyz44t86vzs2g372")
     summary_rows = [
         cards.ReviewSummaryRow(label="Itinerary Name", value=package.get("title", "Executive Package")),
         cards.ReviewSummaryRow(label="Flight & Hotel Total", value=f"${price_usd:,.2f} USD (~{price_fet:,.2f} FET)"),
         cards.ReviewSummaryRow(label="Agent Protocol Coordination Fee", value=f"{fee_fet:.1f} FET"),
+        cards.ReviewSummaryRow(label="Settlement Payee Wallet", value=f"{wallet_addr[:10]}...{wallet_addr[-6:]} (Fetch.ai Ledger)"),
         cards.ReviewSummaryRow(label="Total Escrow Authorization", value=f"{total_fet:,.2f} FET"),
         cards.ReviewSummaryRow(label="Payment Rail", value="Fetch.ai Native Ledger / Smart Escrow"),
     ]
@@ -217,10 +220,13 @@ def build_payment_receipt_card(
     flight = package.get("flight", {})
     lodging = package.get("lodging", {})
 
+    wallet_addr = os.getenv("SETTLEMENT_WALLET_ADDRESS", "fetch15a0xsau6vx8xks7k4k4mrquyz44t86vzs2g372")
     summary_rows = [
         cards.DetailSummaryRow(label="Booking Status", value="CONFIRMED & ESCROW LOCKED ✅"),
         cards.DetailSummaryRow(label="Reservation PNR", value=booking_pnr),
         cards.DetailSummaryRow(label="Ledger Transaction ID", value=tx_id),
+        cards.DetailSummaryRow(label="Settlement Payee Wallet", value=wallet_addr),
+        cards.DetailSummaryRow(label="Platform Fee Settled", value="5.0 FET (AeroVoyage Settlement Agent)"),
         cards.DetailSummaryRow(label="Settled Amount", value=f"{amount_fet:,.2f} FET"),
         cards.DetailSummaryRow(label="Flight Carrier", value=f"{flight.get('carrier')} (Confirmed)"),
         cards.DetailSummaryRow(label="Hotel Reservation", value=f"{lodging.get('name')} (Guaranteed)"),

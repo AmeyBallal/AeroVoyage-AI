@@ -62,6 +62,11 @@ class TestProtocols(unittest.TestCase):
         self.assertEqual(proto.name, "AgentPaymentProtocol")
         self.assertEqual(proto._role, "seller")
 
+    def test_monetization_model_and_settlement_wallet(self):
+        from src.config import SETTLEMENT_WALLET_ADDRESS, AGENT_FEE_FET
+        self.assertEqual(SETTLEMENT_WALLET_ADDRESS, "fetch15a0xsau6vx8xks7k4k4mrquyz44t86vzs2g372")
+        self.assertEqual(AGENT_FEE_FET, 5.0)
+
 
 if __name__ == "__main__":
     unittest.main()

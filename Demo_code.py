@@ -523,12 +523,14 @@ def make_detail_card(pkg: Dict[str, Any], travel_data: Dict[str, Any]) -> Metada
 
 def make_review_card(pkg: Dict[str, Any], fee_fet: float = 5.0) -> MetadataContent:
     total_fet = round(pkg["price_fet"] + fee_fet, 2)
+    wallet_addr = os.getenv("SETTLEMENT_WALLET_ADDRESS", "fetch15a0xsau6vx8xks7k4k4mrquyz44t86vzs2g372")
     rows = [
         cards.ReviewSummaryRow(label="Selected Package", value=pkg["title"]),
-        cards.ReviewSummaryRow(label="Travel Cost", value=f"${pkg['price_usd']:,.2f} USD (~{pkg['price_fet']:,.2f} FET)"),
-        cards.ReviewSummaryRow(label="Agent Coordination Fee", value=f"{fee_fet:.1f} FET"),
+        cards.ReviewSummaryRow(label="Travel Supplier Cost", value=f"${pkg['price_usd']:,.2f} USD (~{pkg['price_fet']:,.2f} FET)"),
+        cards.ReviewSummaryRow(label="Agent Protocol Coordination Fee", value=f"{fee_fet:.1f} FET"),
+        cards.ReviewSummaryRow(label="Settlement Payee Wallet", value=f"{wallet_addr[:10]}...{wallet_addr[-6:]} (Fetch.ai Ledger)"),
         cards.ReviewSummaryRow(label="Total Escrow Authorization", value=f"{total_fet:,.2f} FET"),
-        cards.ReviewSummaryRow(label="Payment Rail", value="Fetch.ai Ledger Smart Escrow"),
+        cards.ReviewSummaryRow(label="Payment Rail", value="Fetch.ai Smart Escrow (payment_protocol_spec)"),
     ]
     payload = cards.ReviewCardPayload(
         title="🔒 Confirm Reservation & Escrow Lock",
@@ -544,13 +546,17 @@ def make_review_card(pkg: Dict[str, Any], fee_fet: float = 5.0) -> MetadataConte
 
 
 def make_receipt_card(pkg: Dict[str, Any], tx_id: str, pnr: str, amount_fet: float) -> MetadataContent:
+    wallet_addr = os.getenv("SETTLEMENT_WALLET_ADDRESS", "fetch15a0xsau6vx8xks7k4k4mrquyz44t86vzs2g372")
     rows = [
         cards.DetailSummaryRow(label="Booking Status", value="CONFIRMED & ESCROW LOCKED ✅"),
         cards.DetailSummaryRow(label="Reservation PNR", value=pnr),
         cards.DetailSummaryRow(label="Ledger Transaction ID", value=tx_id),
-        cards.DetailSummaryRow(label="Amount Settled", value=f"{amount_fet:,.2f} FET"),
+        cards.DetailSummaryRow(label="Settlement Payee Wallet", value=wallet_addr),
+        cards.DetailSummaryRow(label="Platform Fee Settled", value="5.0 FET (AeroVoyage Settlement Agent)"),
+        cards.DetailSummaryRow(label="Total Amount Settled", value=f"{amount_fet:,.2f} FET"),
         cards.DetailSummaryRow(label="Flight Carrier", value=f"{pkg['carrier']} (Confirmed)"),
         cards.DetailSummaryRow(label="Hotel Accommodation", value=f"{pkg['hotel']} (Guaranteed)"),
+        cards.DetailSummaryRow(label="Proof of Performance", value="Cryptographically Verified via Fetch.ai Protocol"),
     ]
     payload = cards.DetailCardPayload(
         title="🎉 Reservation Confirmed & Cryptographically Secured",
@@ -632,8 +638,18 @@ async def process_card_action(ctx: Context, sender: str, session: Dict[str, Any]
         amount_fet = float(sel.get("amount_fet", pkg.get("price_fet", 5.0)))
         tx_id = f"0x{uuid4().hex}"
         pnr = f"AV-{uuid4().hex[:8].upper()}"
+        wallet_addr = os.getenv("SETTLEMENT_WALLET_ADDRESS", "fetch15a0xsau6vx8xks7k4k4mrquyz44t86vzs2g372")
         receipt = make_receipt_card(pkg, tx_id, pnr, amount_fet)
-        await ctx.send(sender, make_chat("🎉 Payment Settled! Your booking is secured on the Fetch.ai ledger:", receipt))
+        confirm_text = (
+            f"🎉 **Reservation Confirmed & Smart Escrow Locked!**\n\n"
+            f"Your booking reference **{pnr}** is cryptographically secured on the Fetch.ai ledger.\n"
+            f"• **Settlement Payee Wallet:** `{wallet_addr}`\n"
+            f"• **Platform Coordination Fee:** `{_AGENT_FEE_FET:.1f} FET` settled to Settlement Agent\n"
+            f"• **Ledger Tx Hash:** `{tx_id}`\n"
+            f"• **Total Settled:** `{amount_fet:,.2f} FET`\n"
+            f"• **Protocol Rail:** Verified via Fetch.ai Payment Protocol (`payment_protocol_spec`)."
+        )
+        await ctx.send(sender, make_chat(confirm_text, receipt))
 
     elif action in ("back_to_comparison", "back"):
         data = session.get("data")

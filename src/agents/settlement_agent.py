@@ -39,24 +39,29 @@ async def handle_settlement_initiate(ctx: Context, sender: str, msg: SettlementI
         f"Pkg: {msg.package_id} ({msg.package_title}) | Amount: {msg.amount_fet} FET"
     )
 
-    # In production/automated multi-agent mode, issue a standard RequestPayment
-    # and lock escrow funds in the ledger
+    # In production/automated multi-agent mode, allocate escrow funds in ledger
     tx_id = f"0x{uuid.uuid4().hex}"
     booking_pnr = f"AV-{uuid.uuid4().hex[:8].upper()}"
+    wallet_addr = settlement_agent.wallet.address()
+    supplier_escrow_fet = round(max(0.0, msg.amount_fet - AGENT_FEE_FET), 2)
 
     ESCROW_LEDGER[tx_id] = {
         "session_id": msg.session_id,
         "sender": sender,
         "user_sender": msg.user_sender,
+        "settlement_wallet": wallet_addr,
         "package_id": msg.package_id,
         "package_title": msg.package_title,
-        "amount_fet": msg.amount_fet,
+        "total_amount_fet": msg.amount_fet,
+        "platform_coordination_fee_fet": AGENT_FEE_FET,
+        "travel_supplier_escrow_fet": supplier_escrow_fet,
         "booking_pnr": booking_pnr,
         "status": "SETTLED_ESCROW_LOCKED",
     }
 
     ctx.logger.info(
-        f"🔒 [SettlementAgent] Escrow locked. Allocated PNR: {booking_pnr} with Tx: {tx_id}"
+        f"🔒 [SettlementAgent] Escrow locked. Allocated PNR: {booking_pnr} with Tx: {tx_id} | "
+        f"Payee Wallet: {wallet_addr} | Platform Fee: {AGENT_FEE_FET} FET | Supplier Escrow: {supplier_escrow_fet} FET"
     )
 
     response = SettlementConfirmedResponse(
@@ -74,7 +79,16 @@ settlement_agent.include(internal_settlement_proto, publish_manifest=True)
 
 @settlement_agent.on_event("startup")
 async def on_startup(ctx: Context):
+    wallet_addr = settlement_agent.wallet.address()
     ctx.logger.info(f"💎 Settlement & Escrow Agent active at address: {settlement_agent.address}")
+    ctx.logger.info(f"💰 Settlement Payee Wallet Address: {wallet_addr}")
+    try:
+        from uagents.network import get_ledger
+        ledger = get_ledger()
+        balance = ledger.query_bank_balance(wallet_addr)
+        ctx.logger.info(f"📊 Current Settlement Agent FET Balance: {balance} FET")
+    except Exception as e:
+        ctx.logger.info(f"Ledger balance query notice: {e}")
 
 
 if __name__ == "__main__":

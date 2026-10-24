@@ -47,6 +47,12 @@ CONCIERGE_ADDRESS = "agent1qg5gewzgdj9mxvxrk2x6hw4kh0u5upxvascpc0ql4x9centpvhmv2
 LOGISTICS_ADDRESS = "agent1qtjcn0xkt4nna7xwg7cyu09eqpt22kwcys2umcmpeu0ctkktv0zrxdqkgck"
 SETTLEMENT_ADDRESS = "agent1qfxpj3zrsfgl58deya9vrnc4hptccmz5v6rt3z8qgdcg8jzlxc4gjfzpu6l"
 
+# Settlement Payee Wallet Address (fetch1... on Fetch.ai ledger for monetization)
+SETTLEMENT_WALLET_ADDRESS = os.getenv(
+    "SETTLEMENT_WALLET_ADDRESS",
+    "fetch15a0xsau6vx8xks7k4k4mrquyz44t86vzs2g372",
+)
+
 # Financial settings
 AGENT_FEE_FET = float(os.getenv("AGENT_FEE_FET", "5.0"))
 FET_ESTIMATED_USD_RATE = float(os.getenv("FET_ESTIMATED_USD_RATE", "1.35"))

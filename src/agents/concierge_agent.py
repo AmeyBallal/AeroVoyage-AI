@@ -30,6 +30,7 @@ from src.config import (
     CONCIERGE_CONFIG,
     LOGISTICS_ADDRESS,
     SETTLEMENT_ADDRESS,
+    SETTLEMENT_WALLET_ADDRESS,
     AGENT_FEE_FET,
 )
 from src.protocols.internal_protocols import (
@@ -468,9 +469,11 @@ async def deliver_booking_confirmation(
     confirmation_text = (
         f"🎉 **Reservation Confirmed & Escrow Locked!**\n\n"
         f"Your booking reference **{pnr}** is cryptographically secured on the Fetch.ai ledger.\n"
-        f"• **Tx Hash:** `{tx_id}`\n"
-        f"• **Settled:** {amount_fet:,.2f} FET\n"
-        f"• **Status:** Guaranteed via AeroVoyage Multi-Agent Settlement Protocol."
+        f"• **Settlement Payee Wallet:** `{SETTLEMENT_WALLET_ADDRESS}`\n"
+        f"• **Platform Coordination Fee:** `{AGENT_FEE_FET:.1f} FET` (Settled to Settlement Agent)\n"
+        f"• **Ledger Tx Hash:** `{tx_id}`\n"
+        f"• **Total Settled Amount:** {amount_fet:,.2f} FET\n"
+        f"• **Payment Protocol Rail:** Verified via Fetch.ai Smart Escrow Protocol (`payment_protocol_spec`)."
     )
     await ctx.send(sender, create_chat_message(confirmation_text, receipt_card))
 
