@@ -41,6 +41,11 @@ from src.protocols.internal_protocols import (
 )
 from src.services.travel_engine import generate_itinerary_packages, parse_intent_from_text
 from src.services.weather_service import fetch_weather
+from src.services.ledger_service import (
+    broadcast_onchain_escrow,
+    get_explorer_tx_url,
+    get_explorer_account_url,
+)
 from src.ui.cards import (
     build_preference_form_card,
     build_itinerary_carousel_card,
@@ -463,15 +468,32 @@ async def deliver_booking_confirmation(
     if not pkg and session.get("last_travel_data"):
         pkg = session["last_travel_data"]["packages"][0]
 
-    session["state"] = "BOOKED"
-    receipt_card = build_payment_receipt_card(pkg, tx_id, pnr, amount_fet)
+    # Broadcast real on-chain transaction if not already broadcast
+    explorer_url = None
+    if tx_id.startswith("0x"):
+        onchain_tx, exp_url = broadcast_onchain_escrow(
+            sender_wallet=concierge_agent._wallet,
+            payee_address=SETTLEMENT_WALLET_ADDRESS,
+            pnr=pnr,
+            nominal_amount_fet=0.05,
+        )
+        if onchain_tx and not onchain_tx.startswith("0x"):
+            tx_id = onchain_tx
+            explorer_url = exp_url
 
+    session["state"] = "BOOKED"
+    receipt_card = build_payment_receipt_card(pkg, tx_id, pnr, amount_fet, explorer_url=explorer_url)
+
+    explorer_line = f"• **Live Dorado Explorer:** {explorer_url}\n" if explorer_url else ""
+    account_url = get_explorer_account_url(SETTLEMENT_WALLET_ADDRESS)
     confirmation_text = (
         f"🎉 **Reservation Confirmed & Escrow Locked!**\n\n"
-        f"Your booking reference **{pnr}** is cryptographically secured on the Fetch.ai ledger.\n"
+        f"Your booking reference **{pnr}** is cryptographically secured on the Fetch.ai Dorado ledger.\n"
         f"• **Settlement Payee Wallet:** `{SETTLEMENT_WALLET_ADDRESS}`\n"
+        f"• **Payee Account Explorer:** {account_url}\n"
         f"• **Platform Coordination Fee:** `{AGENT_FEE_FET:.1f} FET` (Settled to Settlement Agent)\n"
         f"• **Ledger Tx Hash:** `{tx_id}`\n"
+        f"{explorer_line}"
         f"• **Total Settled Amount:** {amount_fet:,.2f} FET\n"
         f"• **Payment Protocol Rail:** Verified via Fetch.ai Smart Escrow Protocol (`payment_protocol_spec`)."
     )

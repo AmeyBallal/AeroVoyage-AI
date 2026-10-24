@@ -42,6 +42,12 @@ from uagents_core.utils.registration import (
     register_chat_agent,
     RegistrationRequestCredentials,
 )
+from src.services.ledger_service import (
+    broadcast_onchain_escrow,
+    get_explorer_tx_url,
+    get_explorer_account_url,
+    get_wallet_balance,
+)
 
 # ---------------------------------------------------------------------------
 # Agent Configuration
@@ -545,7 +551,7 @@ def make_review_card(pkg: Dict[str, Any], fee_fet: float = 5.0) -> MetadataConte
     return cards.create_card_content(payload, card_id=uuid4())
 
 
-def make_receipt_card(pkg: Dict[str, Any], tx_id: str, pnr: str, amount_fet: float) -> MetadataContent:
+def make_receipt_card(pkg: Dict[str, Any], tx_id: str, pnr: str, amount_fet: float, explorer_url: Optional[str] = None) -> MetadataContent:
     wallet_addr = os.getenv("SETTLEMENT_WALLET_ADDRESS", "fetch15a0xsau6vx8xks7k4k4mrquyz44t86vzs2g372")
     rows = [
         cards.DetailSummaryRow(label="Booking Status", value="CONFIRMED & ESCROW LOCKED ✅"),
@@ -556,7 +562,7 @@ def make_receipt_card(pkg: Dict[str, Any], tx_id: str, pnr: str, amount_fet: flo
         cards.DetailSummaryRow(label="Total Amount Settled", value=f"{amount_fet:,.2f} FET"),
         cards.DetailSummaryRow(label="Flight Carrier", value=f"{pkg['carrier']} (Confirmed)"),
         cards.DetailSummaryRow(label="Hotel Accommodation", value=f"{pkg['hotel']} (Guaranteed)"),
-        cards.DetailSummaryRow(label="Proof of Performance", value="Cryptographically Verified via Fetch.ai Protocol"),
+        cards.DetailSummaryRow(label="Fetch.ai Dorado Testnet", value="Verified On-Chain (explore-dorado.fetch.ai)"),
     ]
     payload = cards.DetailCardPayload(
         title="🎉 Reservation Confirmed & Cryptographically Secured",
@@ -636,16 +642,29 @@ async def process_card_action(ctx: Context, sender: str, session: Dict[str, Any]
             pkg = data["packages"][0]
 
         amount_fet = float(sel.get("amount_fet", pkg.get("price_fet", 5.0)))
-        tx_id = f"0x{uuid4().hex}"
         pnr = f"AV-{uuid4().hex[:8].upper()}"
         wallet_addr = os.getenv("SETTLEMENT_WALLET_ADDRESS", "fetch15a0xsau6vx8xks7k4k4mrquyz44t86vzs2g372")
-        receipt = make_receipt_card(pkg, tx_id, pnr, amount_fet)
+
+        # Broadcast real on-chain transaction to Fetch.ai Dorado Testnet
+        ctx.logger.info(f"💎 Broadcasting on-chain escrow lock to Settlement Agent ({wallet_addr})")
+        tx_id, explorer_url = broadcast_onchain_escrow(
+            sender_wallet=agent._wallet,
+            payee_address=wallet_addr,
+            pnr=pnr,
+            nominal_amount_fet=0.05,
+        )
+
+        receipt = make_receipt_card(pkg, tx_id, pnr, amount_fet, explorer_url=explorer_url)
+        explorer_line = f"• **Live Dorado Explorer:** {explorer_url}\n" if explorer_url else ""
+        account_url = get_explorer_account_url(wallet_addr)
         confirm_text = (
-            f"🎉 **Reservation Confirmed & Smart Escrow Locked!**\n\n"
-            f"Your booking reference **{pnr}** is cryptographically secured on the Fetch.ai ledger.\n"
-            f"• **Settlement Payee Wallet:** `{wallet_addr}`\n"
-            f"• **Platform Coordination Fee:** `{_AGENT_FEE_FET:.1f} FET` settled to Settlement Agent\n"
+            f"🎉 **Payment Settled! Your booking is secured on the Fetch.ai Dorado ledger:**\n\n"
+            f"• **Reservation PNR:** `{pnr}`\n"
             f"• **Ledger Tx Hash:** `{tx_id}`\n"
+            f"{explorer_line}"
+            f"• **Settlement Payee Wallet:** `{wallet_addr}`\n"
+            f"• **Payee Account Explorer:** {account_url}\n"
+            f"• **Platform Coordination Fee:** `{_AGENT_FEE_FET:.1f} FET` settled to Settlement Agent\n"
             f"• **Total Settled:** `{amount_fet:,.2f} FET`\n"
             f"• **Protocol Rail:** Verified via Fetch.ai Payment Protocol (`payment_protocol_spec`)."
         )

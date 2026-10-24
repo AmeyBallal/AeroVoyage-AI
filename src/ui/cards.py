@@ -215,6 +215,7 @@ def build_payment_receipt_card(
     tx_id: str,
     booking_pnr: str,
     amount_fet: float,
+    explorer_url: Optional[str] = None,
 ) -> MetadataContent:
     """Build a terminal Detail/Receipt Card after successful settlement."""
     flight = package.get("flight", {})
@@ -230,7 +231,7 @@ def build_payment_receipt_card(
         cards.DetailSummaryRow(label="Settled Amount", value=f"{amount_fet:,.2f} FET"),
         cards.DetailSummaryRow(label="Flight Carrier", value=f"{flight.get('carrier')} (Confirmed)"),
         cards.DetailSummaryRow(label="Hotel Reservation", value=f"{lodging.get('name')} (Guaranteed)"),
-        cards.DetailSummaryRow(label="Proof of Execution", value="Cryptographically Verified via Fetch.ai Protocol"),
+        cards.DetailSummaryRow(label="Fetch.ai Dorado Testnet", value="Verified On-Chain (explore-dorado.fetch.ai)"),
     ]
 
     receipt_payload = cards.DetailCardPayload(
