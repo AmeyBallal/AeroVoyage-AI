@@ -697,7 +697,14 @@ async def process_card_action(ctx: Context, sender: str, session: Dict[str, Any]
         review = make_review_card(pkg, fee_fet=_AGENT_FEE_FET)
         await ctx.send(sender, make_chat("Authorize booking & escrow lock via Fetch.ai Payment Protocol:", review))
 
-    elif action in ("lock_escrow", "confirm_escrow_payment"):
+    elif action in ("lock_escrow", "confirm_escrow_payment", "show_receipt", "view_receipt"):
+        # If user already booked and just asked to see the receipt again
+        if session.get("receipt_data") and action in ("show_receipt", "view_receipt"):
+            rc = session["receipt_data"]
+            receipt = make_receipt_card(rc["pkg"], rc["tx_id"], rc["pnr"], rc["amount_fet"], explorer_url=rc["explorer_url"])
+            await ctx.send(sender, make_chat(rc["confirm_text"], receipt))
+            return
+
         data = session.get("data")
         pkg = session.get("selected")
         if not pkg and data and data.get("packages"):
@@ -706,7 +713,9 @@ async def process_card_action(ctx: Context, sender: str, session: Dict[str, Any]
             dest = session.get("destination") or "San Francisco"
             intent = parse_user_intent(dest)
             data = build_dynamic_travel_packages(intent)
+            session["data"] = data
             pkg = data["packages"][0]
+            session["selected"] = pkg
 
         amount_fet = float(sel.get("amount_fet", pkg.get("price_fet", 5.0)))
         pnr = f"AV-{uuid4().hex[:8].upper()}"
@@ -735,6 +744,14 @@ async def process_card_action(ctx: Context, sender: str, session: Dict[str, Any]
             f"• **Total Settled:** `{amount_fet:,.2f} FET`\n"
             f"• **Protocol Rail:** Verified via Fetch.ai Payment Protocol (`payment_protocol_spec`)."
         )
+        session["receipt_data"] = {
+            "pkg": pkg,
+            "tx_id": tx_id,
+            "pnr": pnr,
+            "amount_fet": amount_fet,
+            "explorer_url": explorer_url,
+            "confirm_text": confirm_text,
+        }
         await ctx.send(sender, make_chat(confirm_text, receipt))
 
     elif action in ("back_to_comparison", "back"):
@@ -819,12 +836,14 @@ async def handle_chat(ctx: Context, sender: str, msg: ChatMessage):
         # Plain Text from ASI:One user (or Card Action encoded as JSON text)
         elif isinstance(item, TextContent):
             user_text = item.text.strip()
-            ctx.logger.info(f"User query received: {user_text}")
+            clean_text = re.sub(r"@\w+\s*", "", user_text).strip()
+            ctx.logger.info(f"User query received: '{user_text}' (clean: '{clean_text}')")
 
-            # 1. CRITICAL: Handle ASI:One Card Actions delivered as JSON text
-            if (user_text.startswith("{") and user_text.endswith("}")) or '"action"' in user_text:
+            # 1. CRITICAL: Handle ASI:One Card Actions delivered as JSON text (strip @mentions & extract { ... })
+            json_match = re.search(r"(\{.*\})", user_text, re.DOTALL)
+            if json_match and '"action"' in json_match.group(1):
                 try:
-                    maybe_action = json.loads(user_text)
+                    maybe_action = json.loads(json_match.group(1))
                     if isinstance(maybe_action, dict) and "action" in maybe_action:
                         ctx.logger.info(f"🎯 Recognized JSON Card Action from text: {maybe_action.get('action')}")
                         await process_card_action(ctx, sender, session, maybe_action)
@@ -832,12 +851,41 @@ async def handle_chat(ctx: Context, sender: str, msg: ChatMessage):
                 except Exception:
                     pass
 
-            # 2. Autonomous Intent & Context Reasoner
-            decision = route_and_reason_query(user_text, session_context=session)
-            if not decision:
-                decision = evaluate_travel_context_fallback(user_text, session_context=session)
+            # 2. Direct natural language receipt request interceptor (e.g. '@aerovoyage show me the receipt ?')
+            receipt_triggers = ("receipt", "show receipt", "where is receipt", "proof of payment", "view receipt", "invoice", "booking confirmation", "confirm booking", "lock escrow", "pay now", "settle")
+            if any(r in clean_text.lower() for r in receipt_triggers):
+                ctx.logger.info(f"🧾 [Receipt Interceptor] Direct receipt request for: '{clean_text}'")
+                await process_card_action(ctx, sender, session, {"action": "lock_escrow"})
+                continue
 
-            if decision.get("intent") == "conversational_qa" and decision.get("reply"):
+            # 3. Direct natural language package reference interceptor (e.g. 'pkg_eco_02', 'I select pkg_eco_02', 'book eco')
+            pkg_match = re.search(r"\b(pkg_[a-z0-9_]+)\b", clean_text, re.IGNORECASE)
+            if pkg_match:
+                pkg_id = pkg_match.group(1).lower()
+                ctx.logger.info(f"🎯 [Package Interceptor] Direct package reference: {pkg_id}")
+                if any(w in clean_text.lower() for w in ("book", "lock", "pay", "approve", "confirm", "receipt")):
+                    await process_card_action(ctx, sender, session, {"action": "lock_escrow", "pkg_id": pkg_id})
+                else:
+                    await process_card_action(ctx, sender, session, {"action": "select_package", "pkg_id": pkg_id})
+                continue
+
+            # 4. Autonomous Intent & Context Reasoner
+            decision = route_and_reason_query(clean_text, session_context=session)
+            if not decision:
+                decision = evaluate_travel_context_fallback(clean_text, session_context=session)
+
+            if decision.get("intent") == "show_receipt":
+                ctx.logger.info("🧾 [LLM Reasoner] Handled query as show_receipt")
+                await process_card_action(ctx, sender, session, {"action": "lock_escrow"})
+                continue
+
+            elif decision.get("intent") == "select_package":
+                pkg_id = decision.get("pkg_id")
+                ctx.logger.info(f"🎯 [LLM Reasoner] Handled query as select_package: {pkg_id}")
+                await process_card_action(ctx, sender, session, {"action": "select_package", "pkg_id": pkg_id})
+                continue
+
+            elif decision.get("intent") == "conversational_qa" and decision.get("reply"):
                 ctx.logger.info("🧠 [LLM Reasoner] Handled query as conversational travel advisory")
                 await ctx.send(sender, make_chat(decision["reply"]))
                 continue

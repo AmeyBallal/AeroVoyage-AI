@@ -291,6 +291,74 @@ class TestEndToEndSimulation(unittest.IsolatedAsyncioTestCase):
         found_sf = any("San Francisco" in r.value for r in detail_card.payload.summary_rows)
         self.assertTrue(found_sf)
 
+    async def test_asi_one_natural_language_receipt_request(self):
+        """Tests that when an ASI:One user asks '@aerovoyage show me the receipt ?',
+        the agent delivers the official on-chain receipt card rather than an LLM disclaimer.
+        """
+        ctx = MockContext()
+        user_address = "agent1_mock_receipt_user_009"
+
+        # 1. Simulate active session with itinerary data
+        itinerary_data = generate_itinerary_packages(
+            origin="Mumbai",
+            destination="New York",
+            departure_date="2026-11-20",
+            return_date="2026-11-23",
+            max_budget_usd=1200.0,
+        )
+        logistics_resp = QueryItineraryResponse(
+            session_id=user_address,
+            success=True,
+            data_json=json.dumps(itinerary_data),
+        )
+        await handle_logistics_response(ctx, LOGISTICS_ADDRESS, logistics_resp)
+
+        # 2. User selects package via text or card action
+        ctx.sent_messages.clear()
+        select_msg = ChatMessage(
+            timestamp=datetime.now(timezone.utc),
+            msg_id=uuid4(),
+            content=[TextContent(type="text", text="@aerovoyage I select pkg_eco_02")],
+        )
+        await handle_chat_message(ctx, user_address, select_msg)
+
+        # 3. User requests receipt: '@aerovoyage show me the receipt ?'
+        ctx.sent_messages.clear()
+        receipt_req_msg = ChatMessage(
+            timestamp=datetime.now(timezone.utc),
+            msg_id=uuid4(),
+            content=[TextContent(type="text", text="@aerovoyage show me the receipt ?")],
+        )
+        await handle_chat_message(ctx, user_address, receipt_req_msg)
+
+        # In multi-agent mode, Concierge dispatches escrow request to Settlement Agent
+        self.assertGreaterEqual(len(ctx.sent_messages), 1)
+        dest, settle_req = ctx.sent_messages[-1]
+        self.assertEqual(dest, SETTLEMENT_ADDRESS)
+        self.assertIsInstance(settle_req, SettlementInitiateRequest)
+
+        # 4. Settlement Agent confirms settlement
+        ctx.sent_messages.clear()
+        settle_conf = SettlementConfirmedResponse(
+            session_id=user_address,
+            booking_pnr="AV-RECEIPT-2026",
+            tx_id="0xreceiptproof123",
+            amount_fet=750.0,
+            status="ESCROW_CONFIRMED",
+        )
+        await handle_settlement_confirmed(ctx, SETTLEMENT_ADDRESS, settle_conf)
+
+        # Verify agent responded with receipt confirmation and terminal Receipt Card
+        dest, receipt_chat = ctx.sent_messages[-1]
+        self.assertEqual(dest, user_address)
+        self.assertIn("Reservation Confirmed", receipt_chat.content[0].text)
+        self.assertNotIn("I do not generate financial receipts", receipt_chat.content[0].text)
+
+        receipt_meta = receipt_chat.content[1]
+        receipt_card = cards.extract_card(receipt_meta)
+        self.assertIsInstance(receipt_card.payload, cards.DetailCardPayload)
+        self.assertTrue(receipt_card.is_terminal)
+
 
 if __name__ == "__main__":
     unittest.main()

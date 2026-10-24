@@ -10,6 +10,7 @@ Implements:
 
 import json
 import os
+import re
 from datetime import datetime, timezone
 from uuid import uuid4
 from typing import Dict, Any, Optional
@@ -161,12 +162,14 @@ async def handle_chat_message(ctx: Context, sender: str, msg: ChatMessage):
         # C. Text Message from User
         elif isinstance(item, TextContent):
             user_text = item.text.strip()
-            ctx.logger.info(f"📝 [User Query] '{user_text}' from {sender}")
+            clean_text = re.sub(r"@\w+\s*", "", user_text).strip()
+            ctx.logger.info(f"📝 [User Query] '{user_text}' (clean: '{clean_text}') from {sender}")
 
-            # 1. Handle ASI:One Card Actions delivered as JSON text
-            if (user_text.startswith("{") and user_text.endswith("}")) or '"action"' in user_text:
+            # 1. Handle ASI:One Card Actions delivered as JSON text (strip @mentions & extract { ... })
+            json_match = re.search(r"(\{.*\})", user_text, re.DOTALL)
+            if json_match and '"action"' in json_match.group(1):
                 try:
-                    maybe_action = json.loads(user_text)
+                    maybe_action = json.loads(json_match.group(1))
                     if isinstance(maybe_action, dict) and "action" in maybe_action:
                         ctx.logger.info(f"🎯 Recognized JSON Card Action from text: {maybe_action.get('action')}")
                         await handle_interactive_card_action(ctx, sender, session, {"selection": maybe_action})
@@ -174,7 +177,25 @@ async def handle_chat_message(ctx: Context, sender: str, msg: ChatMessage):
                 except Exception:
                     pass
 
-            await handle_user_text_intent(ctx, sender, session, user_text)
+            # 2. Direct natural language receipt request interceptor (e.g. '@aerovoyage show me the receipt ?')
+            receipt_triggers = ("receipt", "show receipt", "where is receipt", "proof of payment", "view receipt", "invoice", "booking confirmation", "confirm booking", "lock escrow", "pay now", "settle")
+            if any(r in clean_text.lower() for r in receipt_triggers):
+                ctx.logger.info(f"🧾 [Receipt Interceptor] Direct receipt request for: '{clean_text}'")
+                await handle_interactive_card_action(ctx, sender, session, {"selection": {"action": "confirm_escrow_payment"}})
+                continue
+
+            # 3. Direct natural language package reference interceptor (e.g. 'pkg_eco_02', 'I select pkg_eco_02')
+            pkg_match = re.search(r"\b(pkg_[a-z0-9_]+)\b", clean_text, re.IGNORECASE)
+            if pkg_match:
+                pkg_id = pkg_match.group(1).lower()
+                ctx.logger.info(f"🎯 [Package Interceptor] Direct package reference: {pkg_id}")
+                if any(w in clean_text.lower() for w in ("book", "lock", "pay", "approve", "confirm", "receipt")):
+                    await handle_interactive_card_action(ctx, sender, session, {"selection": {"action": "confirm_escrow_payment", "package_id": pkg_id}})
+                else:
+                    await handle_interactive_card_action(ctx, sender, session, {"selection": {"action": "select_package", "package_id": pkg_id}})
+                continue
+
+            await handle_user_text_intent(ctx, sender, session, clean_text)
 
         # D. End Session
         elif isinstance(item, EndSessionContent):
@@ -265,8 +286,19 @@ async def handle_interactive_card_action(
             await ctx.send(sender, create_chat_message(msg_text, review_card))
 
     # Action 4: User approved & clicked "Authorize & Lock Escrow" on Review Card
-    elif action in ("confirm_escrow_payment", "lock_escrow"):
+    elif action in ("confirm_escrow_payment", "lock_escrow", "show_receipt", "view_receipt"):
+        # If user already booked and just asked to see the receipt again
+        if session.get("receipt_data"):
+            rc = session["receipt_data"]
+            receipt_card = build_payment_receipt_card(rc["pkg"], rc["tx_id"], rc["pnr"], rc["amount_fet"], explorer_url=rc.get("explorer_url"))
+            await ctx.send(sender, create_chat_message(rc["confirm_text"], receipt_card))
+            return
+
         pkg = session.get("selected_package")
+        if not pkg and session.get("last_travel_data") and session["last_travel_data"].get("packages"):
+            pkg = session["last_travel_data"]["packages"][0]
+            session["selected_package"] = pkg
+
         amount_fet = selection.get("amount_fet") or selection.get("amount", 0.0)
 
         # Dispatch settlement request to Settlement & Escrow Agent
@@ -342,7 +374,18 @@ async def handle_user_text_intent(
         if not decision:
             decision = evaluate_travel_context_fallback(user_text, session_context=session)
 
-        if decision.get("intent") == "conversational_qa" and decision.get("reply"):
+        if decision.get("intent") == "show_receipt":
+            ctx.logger.info("🧾 [LLM Reasoner] Handled query as show_receipt")
+            await handle_interactive_card_action(ctx, sender, session, {"selection": {"action": "confirm_escrow_payment"}})
+            return
+
+        elif decision.get("intent") == "select_package":
+            pkg_id = decision.get("pkg_id")
+            ctx.logger.info(f"🎯 [LLM Reasoner] Handled query as select_package: {pkg_id}")
+            await handle_interactive_card_action(ctx, sender, session, {"selection": {"action": "select_package", "package_id": pkg_id}})
+            return
+
+        elif decision.get("intent") == "conversational_qa" and decision.get("reply"):
             ctx.logger.info("🧠 [LLM Reasoner] Handled query as conversational travel advisory")
             await ctx.send(sender, create_chat_message(decision["reply"]))
             return
@@ -542,6 +585,14 @@ async def deliver_booking_confirmation(
         f"• **Total Settled Amount:** {amount_fet:,.2f} FET\n"
         f"• **Payment Protocol Rail:** Verified via Fetch.ai Smart Escrow Protocol (`payment_protocol_spec`)."
     )
+    session["receipt_data"] = {
+        "pkg": pkg,
+        "tx_id": tx_id,
+        "pnr": pnr,
+        "amount_fet": amount_fet,
+        "explorer_url": explorer_url,
+        "confirm_text": confirmation_text,
+    }
     await ctx.send(sender, create_chat_message(confirmation_text, receipt_card))
 
 

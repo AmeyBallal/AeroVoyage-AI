@@ -121,9 +121,13 @@ def route_and_reason_query(
         "3. travel_time: What dates / timing or duration they want to plan (e.g. next Friday, 3 days, Nov 15-20)\n"
         "4. budget: Their target budget in USD or FET (e.g. $1500, 2000 USD, 5000 FET)\n\n"
         "Rules:\n"
-        "1. If user asks general Q&A / travel advisory / capabilities / visas / baggage / how FET escrow works:\n"
+        "1. If user asks to see their receipt, booking confirmation, invoice, transaction proof, or asks to confirm/book/lock escrow (e.g. 'show me the receipt', 'receipt', 'where is my receipt', 'confirm booking', 'lock escrow'):\n"
+        '   Output JSON: {"intent": "show_receipt"}\n'
+        "2. If user selects or approves a package (e.g. 'pkg_eco_02', 'select pkg_exec_01', 'I choose eco', 'book this package'):\n"
+        '   Output JSON: {"intent": "select_package", "pkg_id": "<package_id or null>", "package_tier": "<eco|exec|value or null>"}\n'
+        "3. If user asks general Q&A / travel advisory / capabilities / visas / baggage / how FET escrow works:\n"
         '   Output JSON: {"intent": "conversational_qa", "reply": "<your 1-2 paragraph authoritative answer as AeroVoyage Concierge>"}\n'
-        "2. If user mentions travel intent, answers previous questions, or provides travel details:\n"
+        "4. If user mentions travel intent, answers previous questions, or provides travel details:\n"
         "   - Extract any newly mentioned values for origin, cities (destination), travel_time, budget, days.\n"
         "   - Combine newly extracted values with Known context.\n"
         "   - If ANY of the 4 parameters (origin, destination, travel_time, budget) are still missing or unknown:\n"
@@ -189,7 +193,21 @@ def evaluate_travel_context_fallback(
     """Deterministic NLP and Regex fallback when Groq LLM is unavailable."""
     ctx = dict(session_context or {})
     lower_text = user_text.lower()
-    
+    clean_lower = re.sub(r"@\w+\s*", "", lower_text).strip()
+
+    # 0. Check receipt / booking confirmation triggers
+    receipt_triggers = ("receipt", "show receipt", "where is receipt", "proof of payment", "view receipt", "invoice", "booking confirmation", "confirm booking", "lock escrow", "pay now")
+    if any(r in clean_lower for r in receipt_triggers):
+        return {"intent": "show_receipt"}
+
+    # Check direct package reference
+    pkg_match = re.search(r"\b(pkg_[a-z0-9_]+)\b", clean_lower)
+    if pkg_match:
+        pkg_id = pkg_match.group(1).lower()
+        if any(w in clean_lower for w in ("book", "lock", "pay", "approve", "confirm", "receipt")):
+            return {"intent": "show_receipt", "pkg_id": pkg_id}
+        return {"intent": "select_package", "pkg_id": pkg_id}
+
     # Check general Q&A / greetings without travel intent
     qa_triggers = ("how does", "what is", "do i need", "visa", "baggage", "escrow", "who are you", "what can you do")
     if any(q in lower_text for q in qa_triggers) and not any(k in lower_text for k in ("plan", "book", "trip", "travel", "flight", "hotel", "destination")):
