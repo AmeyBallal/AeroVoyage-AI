@@ -65,7 +65,17 @@ CITY_HOTELS = {
 
 
 def parse_intent_from_text(text: str) -> Dict[str, Any]:
-    """Extracts cities, multi-city flags, duration, and budget from freeform text."""
+    """Extracts cities, multi-city flags, duration, and budget from freeform text, using Groq LLM if available."""
+    # 1. Try Groq Free Tier LLM first
+    try:
+        from src.services.llm_service import parse_intent_with_llm
+        llm_intent = parse_intent_with_llm(text)
+        if llm_intent and llm_intent.get("cities"):
+            return llm_intent
+    except Exception:
+        pass
+
+    # 2. Deterministic rule-based NLP fallback
     lower_text = text.lower()
     found_cities = []
     for city in KNOWN_CITIES:

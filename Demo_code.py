@@ -34,6 +34,14 @@ from uagents_core.contrib.protocols.chat import (
 )
 
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+from uagents_core.utils.registration import (
+    register_chat_agent,
+    RegistrationRequestCredentials,
+)
 
 # ---------------------------------------------------------------------------
 # Agent Configuration
@@ -42,9 +50,10 @@ AGENT_SEED = os.getenv(
     "AGENT_SEED_PHRASE",
     "aerovoyage_standalone_concierge_hackathon_seed_2026",
 )
+os.environ.setdefault("AGENT_SEED_PHRASE", AGENT_SEED)
 
 agent = Agent(
-    name="aerovoyage_standalone_concierge",
+    name="aerovoyage_concierge",
     seed=AGENT_SEED,
     port=int(os.getenv("AGENT_PORT", "8000")),
     mailbox=True,  # Enables seamless Agentverse Mailbox connectivity
@@ -160,8 +169,97 @@ def get_city_weather(city_name: str) -> Dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# Groq Free Tier LLM Integration
+# ---------------------------------------------------------------------------
+GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_MODELS = [
+    os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
+    "llama-3.1-8b-instant",
+    "llama3-70b-8192",
+    "llama3-8b-8192",
+]
+
+
+def call_groq_llm(
+    messages: list,
+    json_mode: bool = False,
+    model: Optional[str] = None,
+    timeout: float = 6.0,
+) -> Optional[str]:
+    """Invokes Groq Free Tier LLMs with automatic model fallback."""
+    api_key = os.getenv("GROQ_API_KEY", "").strip()
+    if not api_key or api_key == "your_groq_api_key_here":
+        return None
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    candidates = [model] if model else GROQ_MODELS
+
+    for cand in candidates:
+        payload: Dict[str, Any] = {
+            "model": cand,
+            "messages": messages,
+            "temperature": 0.2,
+            "max_tokens": 1024,
+        }
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
+
+        try:
+            r = requests.post(GROQ_ENDPOINT, headers=headers, json=payload, timeout=timeout)
+            if r.status_code == 200:
+                return r.json()["choices"][0]["message"]["content"]
+            elif r.status_code in (404, 429):
+                continue
+            else:
+                break
+        except Exception:
+            pass
+    return None
+
+
 def parse_user_intent(text: str) -> Dict[str, Any]:
-    """NLP Parser: extracts destination cities, multi-city flags, duration, and style."""
+    """NLP & LLM Parser: extracts destination cities, multi-city flags, duration, and style."""
+    # 1. Try Groq Free Tier LLM first
+    try:
+        sys_prompt = (
+            "You are an expert travel intent parser for AeroVoyage AI on Fetch.ai / ASI:One. "
+            "Extract trip details from the user prompt into valid JSON:\n"
+            '{\n'
+            '  "cities": ["City1", "City2", ...],\n'
+            '  "days": <int, default 3>,\n'
+            '  "budget": <float, default 1800.0>,\n'
+            '  "is_business": <bool>,\n'
+            '  "is_multi_city": <bool>,\n'
+            '  "meeting_focus": <str>\n'
+            '}\n'
+            'Order cities in route order.'
+        )
+        llm_out = call_groq_llm([
+            {"role": "system", "content": sys_prompt},
+            {"role": "user", "content": text},
+        ], json_mode=True, timeout=5.0)
+
+        if llm_out:
+            parsed = json.loads(llm_out)
+            if parsed.get("cities") and isinstance(parsed["cities"], list) and len(parsed["cities"]) > 0:
+                clean_cities = [c.strip().title() for c in parsed["cities"] if isinstance(c, str)]
+                return {
+                    "cities": clean_cities,
+                    "is_multi_city": len(clean_cities) > 1 or bool(parsed.get("is_multi_city", False)),
+                    "days": int(parsed.get("days", 3)),
+                    "budget": float(parsed.get("budget", 1800.0 if len(clean_cities) > 1 else 1200.0)),
+                    "is_business": bool(parsed.get("is_business", True)),
+                    "meeting_focus": parsed.get("meeting_focus", "Optimized business transit"),
+                    "llm_enhanced": True,
+                }
+    except Exception:
+        pass
+
+    # 2. Robust rule-based / regex fallback
     lower_text = text.lower()
 
     # 1. Extract Cities
@@ -226,7 +324,7 @@ def get_live_fet_rate() -> float:
                 return float(rate)
     except Exception:
         pass
-    return 1.35
+    return float(os.getenv("FET_FALLBACK_RATE", "1.35"))
 
 
 def build_dynamic_travel_packages(intent: Dict[str, Any]) -> Dict[str, Any]:
@@ -349,9 +447,9 @@ def make_form_card(origin: str, destination: str) -> MetadataContent:
     payload = cards.FormCardPayload(
         title="✈️ AeroVoyage Travel Parameters",
         fields=[
-            cards.FormField(name="origin", kind="text", label="Origin City/Airport", required=True, placeholder=origin),
-            cards.FormField(name="destination", kind="text", label="Destination", required=True, placeholder=destination),
-            cards.FormField(name="max_budget", kind="text", label="Max Budget (USD)", required=True, placeholder="1500"),
+            cards.FormField(name="origin", kind="text", label="Origin City/Airport", required=False, placeholder=origin or "e.g. London, New York, Tokyo"),
+            cards.FormField(name="destination", kind="text", label="Destination(s)", required=True, placeholder=destination or "e.g. Berlin, Zurich, Milan"),
+            cards.FormField(name="max_budget", kind="text", label="Max Budget (USD)", required=False, placeholder="e.g. 1500"),
         ],
         submit_cta=cards.CtaAction(label="Search Real-Time Itineraries", selection={"action": "search"}, primary=True),
     )
@@ -461,6 +559,12 @@ def make_receipt_card(pkg: Dict[str, Any], tx_id: str, pnr: str, amount_fet: flo
 
 
 # ---------------------------------------------------------------------------
+# Runtime constants (loaded from env — no hardcoded business values)
+# ---------------------------------------------------------------------------
+_AGENT_FEE_FET = float(os.getenv("AGENT_FEE_FET", "5.0"))
+
+
+# ---------------------------------------------------------------------------
 # Chat Protocol Message Routing
 # ---------------------------------------------------------------------------
 @chat_proto.on_message(ChatAcknowledgement)
@@ -476,9 +580,9 @@ async def handle_chat(ctx: Context, sender: str, msg: ChatMessage):
 
     if sender not in SESSIONS:
         SESSIONS[sender] = {
-            "origin": "New York (JFK)",
-            "destination": "San Francisco (SFO)",
-            "budget": 1500.0,
+            "origin": os.getenv("DEFAULT_ORIGIN", ""),
+            "destination": os.getenv("DEFAULT_DESTINATION", ""),
+            "budget": float(os.getenv("DEFAULT_BUDGET_USD", "1500.0")),
             "data": None,
             "selected": None,
         }
@@ -534,7 +638,7 @@ async def handle_chat(ctx: Context, sender: str, msg: ChatMessage):
 
             elif action == "proceed_review":
                 pkg = session.get("selected") or session["data"]["packages"][0]
-                review = make_review_card(pkg, fee_fet=5.0)
+                review = make_review_card(pkg, fee_fet=_AGENT_FEE_FET)
                 await ctx.send(sender, make_chat("Authorize booking & escrow lock via Fetch.ai Payment Protocol:", review))
 
             elif action == "lock_escrow":
@@ -560,6 +664,20 @@ async def handle_chat(ctx: Context, sender: str, msg: ChatMessage):
         elif isinstance(item, TextContent):
             user_text = item.text.strip()
             ctx.logger.info(f"User query received: {user_text}")
+
+            # Check if this is a general conversational Q&A (not a trip planning query)
+            lower_query = user_text.lower()
+            is_trip_query = any(k in lower_query for k in ("plan", "trip", "travel", "flight", "hotel", "visit", "across", "book", "itinerary", "go to", "days", "fly", "train", "route")) or any(c.lower() in lower_query for c in KNOWN_CITIES)
+            
+            if not is_trip_query:
+                llm_answer = call_groq_llm([
+                    {"role": "system", "content": "You are AeroVoyage AI, the autonomous Travel Concierge on ASI:One. Answer the user's travel, logistics, or Fetch.ai payment question concisely (1-2 short paragraphs) with helpful, authoritative advice. If they want to plan a journey, invite them to state their destination."},
+                    {"role": "user", "content": user_text},
+                ], timeout=5.0)
+                if llm_answer:
+                    await ctx.send(sender, make_chat(llm_answer))
+                    continue
+
             intent = parse_user_intent(user_text)
             session["intent"] = intent
             session["destination"] = " ➔ ".join(intent["cities"])
@@ -567,15 +685,30 @@ async def handle_chat(ctx: Context, sender: str, msg: ChatMessage):
             data = build_dynamic_travel_packages(intent)
             session["data"] = data
             carousel = make_carousel_card(data)
-            await ctx.send(
-                sender,
-                make_chat(
+
+            # Synthesize executive summary with Groq if available
+            llm_summary = None
+            if intent.get("llm_enhanced"):
+                llm_summary = call_groq_llm([
+                    {"role": "system", "content": "You are AeroVoyage AI. Write a concise 2-sentence executive summary highlighting fastest connections between meetings, zero-delay weather forecast, and smart escrow security for the requested route."},
+                    {"role": "user", "content": f"Route: {data['route_label']}, Days: {data['days']}, Weather: {data['weather_summary']}"},
+                ], timeout=4.0)
+
+            if llm_summary:
+                header_msg = (
+                    f"✈️ **AeroVoyage Executive Synthesis for {data['route_label']}**\n\n"
+                    f"{llm_summary}\n\n"
+                    f"• **Live Weather Telemetry:** {data['weather_summary']} (Open-Meteo Verified)\n"
+                    f"• **Meeting Optimization:** Fastest connections between meetings with guaranteed buffers."
+                )
+            else:
+                header_msg = (
                     f"Found 3 curated itineraries for **{data['route_label']}** based on your request:\n\n"
                     f"• **Live Weather:** {data['weather_summary']} (Open-Meteo Verified)\n"
-                    f"• **Meeting Optimization:** Fastest connections between meetings with guaranteed buffers.",
-                    carousel,
-                ),
-            )
+                    f"• **Meeting Optimization:** Fastest connections between meetings with guaranteed buffers."
+                )
+
+            await ctx.send(sender, make_chat(header_msg, carousel))
 
         elif isinstance(item, EndSessionContent):
             ctx.logger.info(f"End session from {sender}")
@@ -594,24 +727,18 @@ if sys.stdout and hasattr(sys.stdout, "reconfigure"):
         pass
 
 if __name__ == "__main__":
-    agentverse_key = os.getenv("AGENTVERSE_KEY")
-    if agentverse_key:
+    if "AGENTVERSE_KEY" in os.environ and "AGENT_SEED_PHRASE" in os.environ:
         try:
-            from uagents_core.utils.registration import (
-                register_chat_agent,
-                RegistrationRequestCredentials,
-            )
-            inspector_url = f"https://agentverse.ai/inspect/?uri=http%3A//127.0.0.1%3A{agent.port}&address={agent.address}"
             register_chat_agent(
-                "AeroVoyage Concierge",
-                inspector_url,
+                "aerovoyage_concierge",
+                "https://agentverse.ai/inspect/?uri=http%3A//127.0.0.1%3A8000&address=agent1qdaxwrdn82n4ut3dag2ftltrqhne9ux2mvf9hgxwahw93zcm04na7wmdgh9",
                 active=True,
                 credentials=RegistrationRequestCredentials(
-                    agentverse_api_key=agentverse_key,
-                    agent_seed_phrase=AGENT_SEED,
+                    agentverse_api_key=os.environ["AGENTVERSE_KEY"],
+                    agent_seed_phrase=os.environ["AGENT_SEED_PHRASE"],        
                 ),
             )
-            print("[AeroVoyage] Auto-registered chat agent with Agentverse successfully!")
+            print("[AeroVoyage] Auto-registered chat agent 'aerovoyage_concierge' with Agentverse successfully!")
         except Exception as reg_err:
             print(f"[AeroVoyage] Agentverse registration notice: {reg_err}")
 

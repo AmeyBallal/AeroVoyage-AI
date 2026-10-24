@@ -9,6 +9,7 @@ Implements:
 """
 
 import json
+import os
 from datetime import datetime, timezone
 from uuid import uuid4
 from typing import Dict, Any, Optional
@@ -74,11 +75,11 @@ def get_or_create_session(sender: str) -> Dict[str, Any]:
     if sender not in SESSIONS:
         SESSIONS[sender] = {
             "state": "INIT",
-            "origin": "New York (JFK)",
-            "destination": "San Francisco (SFO)",
+            "origin": os.getenv("DEFAULT_ORIGIN", ""),
+            "destination": os.getenv("DEFAULT_DESTINATION", ""),
             "departure_date": "2026-11-15",
             "return_date": "2026-11-18",
-            "budget": 1500.0,
+            "budget": float(os.getenv("DEFAULT_BUDGET_USD", "1500.0")),
             "last_travel_data": None,
             "selected_package": None,
         }
@@ -311,6 +312,18 @@ async def handle_user_text_intent(
         return
 
     # Intent B: Parse destination and multi-city route extraction
+    session["user_query"] = user_text
+    is_planning = any(k in lower_text for k in ("plan", "trip", "travel", "flight", "hotel", "visit", "across", "book", "itinerary", "go to", "days", "fly", "train", "route"))
+    if not is_planning:
+        try:
+            from src.services.llm_service import answer_travel_qa_with_llm
+            llm_answer = answer_travel_qa_with_llm(user_text)
+            if llm_answer:
+                await ctx.send(sender, create_chat_message(llm_answer))
+                return
+        except Exception:
+            pass
+
     intent = parse_intent_from_text(user_text)
     session["intent"] = intent
     session["destination"] = " ➔ ".join(intent["cities"])
@@ -375,12 +388,33 @@ async def handle_itinerary_results(
 
     carousel_card = build_itinerary_carousel_card(data)
     route_display = data.get("route_label", session["destination"])
-    response_text = (
-        f"🎯 **Found 3 Curated Itineraries for {route_display}**\n\n"
-        f"• **Live Destination Weather:** {weather_desc} (Open-Meteo Verified)\n"
-        f"• **Routing Optimization:** Fastest connections between meetings with guaranteed buffers.\n\n"
-        f"Use the interactive carousel below to inspect details and choose your preferred package:"
-    )
+
+    llm_brief = None
+    try:
+        from src.services.llm_service import synthesize_travel_brief_with_llm
+        llm_brief = synthesize_travel_brief_with_llm(
+            route_label=route_display,
+            days=session.get("days", 3),
+            weather_summary=weather_desc,
+            packages=data.get("packages", []),
+            user_query=session.get("user_query", route_display),
+        )
+    except Exception:
+        pass
+
+    if llm_brief:
+        response_text = (
+            f"🎯 **Curated Itineraries for {route_display}**\n\n"
+            f"{llm_brief}\n\n"
+            f"Inspect and select from your optimized options below:"
+        )
+    else:
+        response_text = (
+            f"🎯 **Found 3 Curated Itineraries for {route_display}**\n\n"
+            f"• **Live Destination Weather:** {weather_desc} (Open-Meteo Verified)\n"
+            f"• **Routing Optimization:** Fastest connections between meetings with guaranteed buffers.\n\n"
+            f"Use the interactive carousel below to inspect details and choose your preferred package:"
+        )
     await ctx.send(sender, create_chat_message(response_text, carousel_card))
 
 

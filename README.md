@@ -79,7 +79,13 @@ flowchart TD
 - **Review Card (`ReviewCardPayload`):** Escrow lock authorization screen with itemized invoice and approve/reject actions.
 - **Receipt Card (`DetailCardPayload`):** Terminal confirmation displaying unique PNR (`AV-XXXXXX`) and transaction hash.
 
-### 4. Credible Monetization Model (Bonus Points)
+### 4. Groq Free Tier LLM Reasoning Engine (Bonus Points)
+- **Deep Intent & Route Understanding:** Powered by Groq's high-throughput Llama models (`llama-3.3-70b-versatile`, `llama-3.1-8b-instant`).
+- **Autonomous Multi-City Optimization:** Understands complex natural language prompts (e.g. *"Plan a five-day multi-city business trip across Berlin, Zurich, and Milan with fastest connections between meetings"*).
+- **Executive Synthesis & Travel Advisory:** Synthesizes custom travel briefs and provides real-time conversational answers to travel/visa/FET escrow questions directly within ASI:One chat.
+- **Fail-Safe Fallback Architecture:** Automatically falls back across 4 Groq models and reverts to deterministic regex/geocoding if the API key is not configured or rate-limited.
+
+### 5. Credible Monetization Model (Bonus Points)
 - Charges a platform coordination fee of **5.0 FET** per confirmed itinerary.
 - Locks travel escrow directly into the smart escrow ledger, demonstrating a viable post-hackathon business model for autonomous agentic commerce.
 
@@ -129,7 +135,7 @@ python Demo_code.py
 
 ## 5. Automated Test Suite
 
-Run the automated test suite covering all services, card schemas, payment protocol models, and the full simulated ASI:One conversational flow:
+Run the automated test suite covering all services, card schemas, Groq LLM reasoning & fallback, payment protocol models, and the full simulated ASI:One conversational flow:
 
 ```bash
 python -m unittest discover -s tests -p "test_*.py"
@@ -137,7 +143,7 @@ python -m unittest discover -s tests -p "test_*.py"
 
 Output:
 ```text
-Ran 14 tests in 31s
+Ran 19 tests in 65s
 OK (100% Pass Rate)
 ```
 

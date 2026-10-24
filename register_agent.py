@@ -56,7 +56,7 @@ def main():
 
     try:
         success = register_chat_agent(
-            name="AeroVoyage Concierge",
+            name="aerovoyage_concierge",
             endpoint=endpoint_url,
             active=True,
             credentials=RegistrationRequestCredentials(

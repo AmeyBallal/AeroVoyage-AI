@@ -49,4 +49,4 @@ SETTLEMENT_ADDRESS = "agent1qfxpj3zrsfgl58deya9vrnc4hptccmz5v6rt3z8qgdcg8jzlxc4g
 
 # Financial settings
 AGENT_FEE_FET = float(os.getenv("AGENT_FEE_FET", "5.0"))
-FET_ESTIMATED_USD_RATE = 1.35
+FET_ESTIMATED_USD_RATE = float(os.getenv("FET_ESTIMATED_USD_RATE", "1.35"))
