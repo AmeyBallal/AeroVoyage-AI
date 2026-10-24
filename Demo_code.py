@@ -48,6 +48,10 @@ from src.services.ledger_service import (
     get_explorer_account_url,
     get_wallet_balance,
 )
+from src.services.llm_service import (
+    route_and_reason_query,
+    evaluate_travel_context_fallback,
+)
 
 # ---------------------------------------------------------------------------
 # Agent Configuration
@@ -337,6 +341,7 @@ def get_live_fet_rate() -> float:
 
 def build_dynamic_travel_packages(intent: Dict[str, Any]) -> Dict[str, Any]:
     """Generates fully customized, real-time itinerary packages matching user cities & duration."""
+    origin = intent.get("origin")
     cities = intent["cities"]
     days = intent["days"]
     budget = intent["budget"]
@@ -350,11 +355,11 @@ def build_dynamic_travel_packages(intent: Dict[str, Any]) -> Dict[str, Any]:
 
     # Route formatting
     if len(cities) > 1:
-        route_str = " ➔ ".join(cities)
+        route_str = f"{origin} ➔ " + " ➔ ".join(cities) if origin and origin not in cities else " ➔ ".join(cities)
         route_label = f"{route_str} ({days}-Day Multi-City Circuit)"
     else:
-        route_str = cities[0]
-        route_label = f"{cities[0]} ({days}-Day Itinerary)"
+        route_str = f"{origin} ➔ {cities[0]}" if origin and origin != cities[0] else cities[0]
+        route_label = f"{route_str} ({days}-Day Itinerary)"
 
     # Dynamic Hotel Resolution
     def get_hotels(tier: str) -> str:
@@ -365,20 +370,21 @@ def build_dynamic_travel_packages(intent: Dict[str, Any]) -> Dict[str, Any]:
         return " + ".join(hotel_names)
 
     # Dynamic Transit Resolution
+    from_prefix = f"from {origin} " if origin and origin != cities[0] else ""
     if len(cities) > 1:
         is_europe = any(c in ("Berlin", "Zurich", "Milan", "Paris", "London", "Frankfurt", "Rome", "Munich", "Vienna") for c in cities)
         if is_europe:
-            transit_exec = f"Lufthansa Business Shuttle ({cities[0]} ➔ {cities[1]}: 1h 25m) + EuroCity Express High-Speed ({cities[1]} ➔ {cities[-1]}: 3h 17m)"
+            transit_exec = f"Lufthansa Business Shuttle {from_prefix}({cities[0]} ➔ {cities[1]}: 1h 25m) + EuroCity Express High-Speed ({cities[1]} ➔ {cities[-1]}: 3h 17m)"
             transit_eco = f"Direct Electric High-Speed Rail ({' ➔ '.join(cities)} via DB ICE, Swiss SBB & Frecciarossa 1000)"
             transit_val = f"Swiss International Airlines & Regional InterCity Express"
         else:
-            transit_exec = f"Star Alliance / OneWorld Executive Hopper connecting {' ➔ '.join(cities)} (Priority Fast-Track)"
+            transit_exec = f"Star Alliance / OneWorld Executive Hopper {from_prefix}connecting {' ➔ '.join(cities)} (Priority Fast-Track)"
             transit_eco = f"Modern Low-Emission Fleet / Direct Rail Transfers between {' ➔ '.join(cities)}"
             transit_val = f"Point-to-Point Agile Transit connecting {' ➔ '.join(cities)}"
     else:
-        transit_exec = f"Non-Stop First / Business Carrier to {cities[0]} (Priority Meeting Buffer)"
-        transit_eco = f"Virgin / Delta Modern Eco-Fleet to {cities[0]} (Carbon Offset Included)"
-        transit_val = f"JetBlue Mint / Direct Express to {cities[0]}"
+        transit_exec = f"Non-Stop First / Business Carrier {from_prefix}to {cities[0]} (Priority Meeting Buffer)"
+        transit_eco = f"Virgin / Delta Modern Eco-Fleet {from_prefix}to {cities[0]} (Carbon Offset Included)"
+        transit_val = f"JetBlue Mint / Direct Express {from_prefix}to {cities[0]}"
 
     pkg1_usd = round(budget * 0.90, 2)
     pkg2_usd = round(budget * 0.75, 2)
@@ -451,15 +457,46 @@ def make_chat(text: str, card_meta: Optional[MetadataContent] = None) -> ChatMes
     )
 
 
-def make_form_card(origin: str, destination: str) -> MetadataContent:
+def make_form_card(
+    origin: str = "",
+    destination: str = "",
+    travel_time: str = "",
+    budget: Optional[float] = None,
+) -> MetadataContent:
+    budget_str = f"{int(budget)}" if budget else ""
     payload = cards.FormCardPayload(
         title="✈️ AeroVoyage Travel Parameters",
         fields=[
-            cards.FormField(name="origin", kind="text", label="Origin City/Airport", required=False, placeholder=origin or "e.g. London, New York, Tokyo"),
-            cards.FormField(name="destination", kind="text", label="Destination(s)", required=True, placeholder=destination or "e.g. Berlin, Zurich, Milan"),
-            cards.FormField(name="max_budget", kind="text", label="Max Budget (USD)", required=False, placeholder="e.g. 1500"),
+            cards.FormField(
+                name="origin",
+                kind="text",
+                label="1. Where You Live / Departure Origin",
+                required=True,
+                placeholder=origin or "e.g. London, New York, Mumbai, San Francisco",
+            ),
+            cards.FormField(
+                name="destination",
+                kind="text",
+                label="2. Where You Want To Go (Destination)",
+                required=True,
+                placeholder=destination or "e.g. Berlin, Zurich, Milan, Tokyo, Paris",
+            ),
+            cards.FormField(
+                name="travel_time",
+                kind="text",
+                label="3. Travel Timing / Dates / Duration",
+                required=True,
+                placeholder=travel_time or "e.g. Next week, Oct 28 - Nov 2, 3 days",
+            ),
+            cards.FormField(
+                name="max_budget",
+                kind="text",
+                label="4. Target Budget (USD or FET)",
+                required=True,
+                placeholder=budget_str or "e.g. 1500",
+            ),
         ],
-        submit_cta=cards.CtaAction(label="Search Real-Time Itineraries", selection={"action": "search"}, primary=True),
+        submit_cta=cards.CtaAction(label="Submit Travel Details & Search", selection={"action": "search"}, primary=True),
     )
     return cards.create_card_content(payload, card_id=uuid4())
 
@@ -585,20 +622,50 @@ async def process_card_action(ctx: Context, sender: str, session: Dict[str, Any]
     action = sel.get("action")
     ctx.logger.info(f"🎯 Processing card action: '{action}' with data: {sel}")
 
-    if action == "search":
-        dest_input = sel.get("destination", session.get("destination", "Berlin, Zurich, Milan"))
-        intent = parse_user_intent(dest_input)
-        if "max_budget" in sel:
+    if action in ("search", "search_itineraries"):
+        origin_val = sel.get("origin") or session.get("origin") or ""
+        dest_val = sel.get("destination") or session.get("destination") or ""
+        time_val = sel.get("travel_time") or sel.get("departure_date") or session.get("travel_time") or ""
+        budget_val = None
+        if "max_budget" in sel and sel["max_budget"]:
             try:
-                intent["budget"] = float(sel["max_budget"])
+                budget_val = float(sel["max_budget"])
             except ValueError:
                 pass
+        if not budget_val:
+            budget_val = session.get("budget", 1500.0)
+
+        session["origin"] = origin_val
+        session["destination"] = dest_val
+        session["travel_time"] = time_val
+        session["budget"] = budget_val
+
+        # Check if enough context from form submission
+        if not origin_val or not dest_val:
+            missing = []
+            if not origin_val:
+                missing.append("• 📍 **Where do you live / where are you departing from?**")
+            if not dest_val:
+                missing.append("• 🎯 **Where do you want to travel to?**")
+            clarify_msg = (
+                "👋 Please specify your departure origin and destination to proceed:\n\n"
+                + "\n".join(missing)
+            )
+            card = make_form_card(origin_val, dest_val, time_val, budget_val)
+            await ctx.send(sender, make_chat(clarify_msg, card))
+            return
+
+        intent = parse_user_intent(dest_val)
+        intent["origin"] = origin_val
+        intent["travel_time"] = time_val
+        intent["budget"] = budget_val
         session["intent"] = intent
         session["destination"] = " ➔ ".join(intent["cities"])
         data = build_dynamic_travel_packages(intent)
         session["data"] = data
         carousel = make_carousel_card(data)
-        await ctx.send(sender, make_chat(f"Here are your optimized itineraries for **{data['route_label']}**:", carousel))
+        from_label = f"from **{origin_val}** to " if origin_val else ""
+        await ctx.send(sender, make_chat(f"Here are your optimized itineraries {from_label}**{data['route_label']}**:", carousel))
 
     elif action in ("select_package", "inspect_package"):
         pkg_id = sel.get("pkg_id") or sel.get("package_id")
@@ -678,8 +745,22 @@ async def process_card_action(ctx: Context, sender: str, session: Dict[str, Any]
 
     elif action in ("restart", "restart_flow", "cancel_reservation"):
         session["selected"] = None
-        card = make_form_card(session["origin"], session["destination"])
-        await ctx.send(sender, make_chat("Plan your next trip with AeroVoyage:", card))
+        session["data"] = None
+        session["origin"] = ""
+        session["destination"] = ""
+        session["travel_time"] = ""
+        session["budget"] = None
+        card = make_form_card()
+        msg_text = (
+            "🔄 **Session refreshed!**\n\n"
+            "To plan your next trip, please tell me:\n"
+            "1. 📍 **Where do you live / where are you departing from?**\n"
+            "2. 🎯 **Where do you want to go?**\n"
+            "3. 📅 **What time or dates are you planning for, and for how many days?**\n"
+            "4. 💰 **What is your target budget (in USD or FET)?**\n\n"
+            "You can reply directly in chat or submit the travel parameters card below!"
+        )
+        await ctx.send(sender, make_chat(msg_text, card))
 
 
 # ---------------------------------------------------------------------------
@@ -700,7 +781,9 @@ async def handle_chat(ctx: Context, sender: str, msg: ChatMessage):
         SESSIONS[sender] = {
             "origin": os.getenv("DEFAULT_ORIGIN", ""),
             "destination": os.getenv("DEFAULT_DESTINATION", ""),
-            "budget": float(os.getenv("DEFAULT_BUDGET_USD", "1500.0")),
+            "travel_time": "",
+            "budget": float(os.getenv("DEFAULT_BUDGET_USD", "1500.0")) if os.getenv("DEFAULT_BUDGET_USD") else None,
+            "days": 3,
             "data": None,
             "selected": None,
         }
@@ -711,11 +794,20 @@ async def handle_chat(ctx: Context, sender: str, msg: ChatMessage):
         if isinstance(item, StartSessionContent):
             welcome = (
                 "👋 **Welcome to AeroVoyage AI!**\n\n"
-                "I am your autonomous Travel & Logistics Orchestrator on ASI:One. "
-                "I combine live flights, eco-friendly hotels, real-time Open-Meteo weather forecasts, "
-                "and native Fetch.ai FET escrow settlement directly inside this chat."
+                "I am your autonomous Travel & Logistics Orchestrator on ASI:One with real-time weather telemetry and Fetch.ai smart escrow settlement.\n\n"
+                "To curate your personalized itinerary, could you share a few details:\n"
+                "1. 📍 **Where do you live / where are you departing from?**\n"
+                "2. 🎯 **Where do you want to go?**\n"
+                "3. 📅 **What time or dates are you planning for, and for how many days?**\n"
+                "4. 💰 **What is your target budget (in USD or FET)?**\n\n"
+                "You can reply directly in this chat or use the travel form below!"
             )
-            card = make_form_card(session["origin"], session["destination"])
+            card = make_form_card(
+                session.get("origin", ""),
+                session.get("destination", ""),
+                session.get("travel_time", ""),
+                session.get("budget"),
+            )
             await ctx.send(sender, make_chat(welcome, card))
 
         # Interactive Card Response (Native Metadata)
@@ -740,105 +832,96 @@ async def handle_chat(ctx: Context, sender: str, msg: ChatMessage):
                 except Exception:
                     pass
 
-            # 2. Primary LLM Autonomous Reasoning (Advisory vs Booking Workflow)
-            if os.getenv("GROQ_API_KEY", "").strip():
-                try:
-                    router_prompt = (
-                        "You are AeroVoyage AI, the autonomous Travel & Logistics Concierge on ASI:One.\n"
-                        "Analyze the user message:\n"
-                        "- If the user asks a general question (such as travel advice, visas, baggage, "
-                        "how Fetch.ai escrow works, FET payments, greetings, capabilities), output JSON:\n"
-                        '{"intent": "conversational_qa", "reply": "<your 1-2 paragraph authoritative answer as AeroVoyage Concierge>"}\n'
-                        "- If the user wants to search, plan, compare, or book an itinerary/flight/hotel (e.g. 'plan a trip to Berlin', 'find flights to London', '5-day trip across Berlin, Zurich, Milan'), output JSON:\n"
-                        '{"intent": "plan_itinerary", "cities": ["City1", ...], "days": <int>, "budget": <float>, "is_business": <bool>, "meeting_focus": "<str>"}\n'
-                        "Always output valid JSON only."
-                    )
-                    llm_decision_raw = call_groq_llm([
-                        {"role": "system", "content": router_prompt},
-                        {"role": "user", "content": user_text},
-                    ], json_mode=True, timeout=8.0)
+            # 2. Autonomous Intent & Context Reasoner
+            decision = route_and_reason_query(user_text, session_context=session)
+            if not decision:
+                decision = evaluate_travel_context_fallback(user_text, session_context=session)
 
-                    if llm_decision_raw:
-                        decision = json.loads(llm_decision_raw)
-                        if decision.get("intent") == "conversational_qa" and decision.get("reply"):
-                            ctx.logger.info("🧠 [LLM Reasoner] Handled query as conversational travel advisory")
-                            await ctx.send(sender, make_chat(decision["reply"]))
-                            continue
-                        elif decision.get("intent") == "plan_itinerary" and decision.get("cities"):
-                            ctx.logger.info(f"🧠 [LLM Reasoner] Handled query as travel planning for {decision.get('cities')}")
-                            clean_cities = [c.strip().title() for c in decision["cities"] if isinstance(c, str)]
-                            intent = {
-                                "cities": clean_cities,
-                                "is_multi_city": len(clean_cities) > 1,
-                                "days": int(decision.get("days", 3)),
-                                "budget": float(decision.get("budget", 1800.0 if len(clean_cities) > 1 else 1200.0)),
-                                "is_business": bool(decision.get("is_business", True)),
-                                "meeting_focus": decision.get("meeting_focus", "Optimized business transit"),
-                                "llm_enhanced": True,
-                            }
-                            session["intent"] = intent
-                            session["destination"] = " ➔ ".join(clean_cities)
-                            session["budget"] = intent["budget"]
-                            data = build_dynamic_travel_packages(intent)
-                            session["data"] = data
-                            carousel = make_carousel_card(data)
+            if decision.get("intent") == "conversational_qa" and decision.get("reply"):
+                ctx.logger.info("🧠 [LLM Reasoner] Handled query as conversational travel advisory")
+                await ctx.send(sender, make_chat(decision["reply"]))
+                continue
 
-                            llm_summary = call_groq_llm([
-                                {"role": "system", "content": "You are AeroVoyage AI. Write a concise 2-sentence executive summary highlighting fastest connections between meetings, zero-delay weather forecast, and smart escrow security for the requested route."},
-                                {"role": "user", "content": f"Route: {data['route_label']}, Days: {data['days']}, Weather: {data['weather_summary']}"},
-                            ], timeout=4.0)
+            elif decision.get("intent") == "ask_clarification":
+                ctx.logger.info(f"❓ [Context Reasoner] Gathering missing parameters: {decision.get('missing_fields')}")
+                ext = decision.get("extracted", {})
+                if ext.get("origin"):
+                    session["origin"] = ext["origin"]
+                if ext.get("cities"):
+                    session["destination"] = " ➔ ".join(ext["cities"])
+                    session["cities"] = ext["cities"]
+                if ext.get("travel_time"):
+                    session["travel_time"] = ext["travel_time"]
+                if ext.get("budget"):
+                    session["budget"] = float(ext["budget"])
+                if ext.get("days"):
+                    session["days"] = int(ext["days"])
 
-                            if llm_summary:
-                                header_msg = (
-                                    f"✈️ **AeroVoyage Executive Synthesis for {data['route_label']}**\n\n"
-                                    f"{llm_summary}\n\n"
-                                    f"• **Live Weather Telemetry:** {data['weather_summary']} (Open-Meteo Verified)\n"
-                                    f"• **Meeting Optimization:** Fastest connections between meetings with guaranteed buffers."
-                                )
-                            else:
-                                header_msg = (
-                                    f"Found 3 curated itineraries for **{data['route_label']}** based on your request:\n\n"
-                                    f"• **Live Weather:** {data['weather_summary']} (Open-Meteo Verified)\n"
-                                    f"• **Meeting Optimization:** Fastest connections between meetings with guaranteed buffers."
-                                )
+                reply_text = decision.get("reply", "Please provide more details about where you live, where you want to go, what time you plan to travel, and your budget.")
+                card = make_form_card(
+                    session.get("origin", ""),
+                    session.get("destination", ""),
+                    session.get("travel_time", ""),
+                    session.get("budget"),
+                )
+                await ctx.send(sender, make_chat(reply_text, card))
+                continue
 
-                            await ctx.send(sender, make_chat(header_msg, carousel))
-                            continue
-                except Exception as exc:
-                    ctx.logger.warning(f"LLM reasoner notice: {exc}")
+            elif decision.get("intent") == "plan_itinerary":
+                ctx.logger.info(f"✈️ [Context Reasoner] Context complete! Planning itinerary for {decision.get('cities')}")
+                clean_cities = [c.strip().title() for c in decision.get("cities", []) if isinstance(c, str)]
+                if not clean_cities:
+                    clean_cities = [session.get("destination") or "San Francisco"]
 
-            # 3. Fallback to rule-based engine if LLM is unavailable
-            intent = parse_user_intent(user_text)
-            session["intent"] = intent
-            session["destination"] = " ➔ ".join(intent["cities"])
-            session["budget"] = intent["budget"]
-            data = build_dynamic_travel_packages(intent)
-            session["data"] = data
-            carousel = make_carousel_card(data)
+                origin_city = decision.get("origin") or session.get("origin", "")
+                travel_time_val = decision.get("travel_time") or session.get("travel_time", "")
+                budget_val = float(decision.get("budget") or session.get("budget", 1500.0))
+                days_val = int(decision.get("days") or session.get("days", 3))
 
-            # Synthesize executive summary with Groq if available
-            llm_summary = None
-            if intent.get("llm_enhanced"):
+                session["origin"] = origin_city
+                session["cities"] = clean_cities
+                session["destination"] = " ➔ ".join(clean_cities)
+                session["travel_time"] = travel_time_val
+                session["budget"] = budget_val
+                session["days"] = days_val
+
+                intent = {
+                    "origin": origin_city,
+                    "cities": clean_cities,
+                    "is_multi_city": len(clean_cities) > 1,
+                    "travel_time": travel_time_val,
+                    "days": days_val,
+                    "budget": budget_val,
+                    "is_business": bool(decision.get("is_business", True)),
+                    "meeting_focus": decision.get("meeting_focus", "Optimized business transit"),
+                    "llm_enhanced": True,
+                }
+                session["intent"] = intent
+                data = build_dynamic_travel_packages(intent)
+                session["data"] = data
+                carousel = make_carousel_card(data)
+
+                # Synthesize executive summary with Groq if available
                 llm_summary = call_groq_llm([
                     {"role": "system", "content": "You are AeroVoyage AI. Write a concise 2-sentence executive summary highlighting fastest connections between meetings, zero-delay weather forecast, and smart escrow security for the requested route."},
                     {"role": "user", "content": f"Route: {data['route_label']}, Days: {data['days']}, Weather: {data['weather_summary']}"},
                 ], timeout=4.0)
 
-            if llm_summary:
                 header_msg = (
                     f"✈️ **AeroVoyage Executive Synthesis for {data['route_label']}**\n\n"
                     f"{llm_summary}\n\n"
+                    f"• **Departure:** {origin_city or 'Direct Connection'} | **Timing:** {travel_time_val or 'Flexible'}\n"
                     f"• **Live Weather Telemetry:** {data['weather_summary']} (Open-Meteo Verified)\n"
                     f"• **Meeting Optimization:** Fastest connections between meetings with guaranteed buffers."
-                )
-            else:
-                header_msg = (
+                ) if llm_summary else (
                     f"Found 3 curated itineraries for **{data['route_label']}** based on your request:\n\n"
+                    f"• **Departure:** {origin_city or 'Direct Connection'} | **Timing:** {travel_time_val or 'Flexible'}\n"
                     f"• **Live Weather:** {data['weather_summary']} (Open-Meteo Verified)\n"
                     f"• **Meeting Optimization:** Fastest connections between meetings with guaranteed buffers."
                 )
 
-            await ctx.send(sender, make_chat(header_msg, carousel))
+                await ctx.send(sender, make_chat(header_msg, carousel))
+                continue
 
         elif isinstance(item, EndSessionContent):
             ctx.logger.info(f"End session from {sender}")

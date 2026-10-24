@@ -86,6 +86,46 @@ class TestLLMService(unittest.TestCase):
             self.assertEqual(decision["intent"], "conversational_qa")
             self.assertIn("Schengen rules", decision["reply"])
 
+    @patch("requests.post")
+    def test_route_and_reason_query_insufficient_context(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "choices": [
+                {
+                    "message": {
+                        "content": '{"intent": "ask_clarification", "missing_fields": ["origin", "travel_time", "budget"], "extracted": {"origin": null, "cities": ["Tokyo"], "travel_time": null, "budget": null}, "reply": "Where are you departing from, what are your dates, and what is your budget?"}'
+                    }
+                }
+            ]
+        }
+        mock_post.return_value = mock_resp
+
+        with patch.dict("os.environ", {"GROQ_API_KEY": "gsk_test123"}):
+            decision = route_and_reason_query("I want to visit Tokyo")
+            self.assertEqual(decision["intent"], "ask_clarification")
+            self.assertIn("origin", decision["missing_fields"])
+            self.assertIn("budget", decision["missing_fields"])
+
+    def test_evaluate_travel_context_fallback_insufficient(self):
+        from src.services.llm_service import evaluate_travel_context_fallback
+        res = evaluate_travel_context_fallback("I want to travel to Tokyo", session_context={})
+        self.assertEqual(res["intent"], "ask_clarification")
+        self.assertIn("origin", res["missing_fields"])
+        self.assertIn("budget", res["missing_fields"])
+        self.assertIn("Where do you live", res["reply"])
+
+    def test_evaluate_travel_context_fallback_complete(self):
+        from src.services.llm_service import evaluate_travel_context_fallback
+        res = evaluate_travel_context_fallback(
+            "I live in New York, plan a 3-day trip to Tokyo next week under $2500",
+            session_context={},
+        )
+        self.assertEqual(res["intent"], "plan_itinerary")
+        self.assertEqual(res["origin"], "New York")
+        self.assertIn("Tokyo", res["cities"])
+        self.assertEqual(res["budget"], 2500.0)
+
     def test_travel_engine_fallback_when_no_groq(self):
         # Even without Groq, travel engine extracts intent deterministically
         with patch.dict("os.environ", {"GROQ_API_KEY": ""}):

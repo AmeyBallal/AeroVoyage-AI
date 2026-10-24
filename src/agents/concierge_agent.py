@@ -141,7 +141,12 @@ async def handle_chat_message(ctx: Context, sender: str, msg: ChatMessage):
                 "I am your autonomous Travel & Logistics Orchestrator discovered via ASI:One. "
                 "I can coordinate live flights, eco-certified lodging, destination weather forecasts, "
                 "and native FET payment settlement directly inside this chat.\n\n"
-                "Please configure your trip preferences using the interactive card below or tell me where you'd like to travel."
+                "To curate your personalized itinerary, could you share a few details:\n"
+                "1. 📍 **Where do you live / where are you departing from?**\n"
+                "2. 🎯 **Where do you want to go?**\n"
+                "3. 📅 **What time or dates are you planning for, and for how many days?**\n"
+                "4. 💰 **What is your target budget (in USD or FET)?**\n\n"
+                "Please configure your trip preferences using the interactive card below or reply directly in chat!"
             )
             form_card = build_preference_form_card(session["origin"], session["destination"])
             await ctx.send(sender, create_chat_message(welcome_text, form_card))
@@ -329,35 +334,75 @@ async def handle_user_text_intent(
         await ctx.send(sender, create_chat_message(info_text, form_card))
         return
 
-    # Intent B: Primary LLM Autonomous Reasoning (Advisory vs Booking Workflow)
+    # Intent B: Primary LLM Autonomous Reasoning & Context Gathering
     session["user_query"] = user_text
     try:
-        from src.services.llm_service import route_and_reason_query
-        decision = route_and_reason_query(user_text)
-        if decision:
-            if decision.get("intent") == "conversational_qa" and decision.get("reply"):
-                ctx.logger.info("🧠 [LLM Reasoner] Handled query as conversational travel advisory")
-                await ctx.send(sender, create_chat_message(decision["reply"]))
-                return
-            elif decision.get("intent") == "plan_itinerary" and decision.get("cities"):
-                ctx.logger.info(f"🧠 [LLM Reasoner] Handled query as multi-agent itinerary request for {decision['cities']}")
-                clean_cities = [c.strip().title() for c in decision["cities"] if isinstance(c, str)]
-                intent = {
-                    "cities": clean_cities,
-                    "is_multi_city": len(clean_cities) > 1,
-                    "days": int(decision.get("days", 3)),
-                    "budget": float(decision.get("budget", 1800.0 if len(clean_cities) > 1 else 1500.0)),
-                    "is_business": bool(decision.get("is_business", True)),
-                    "meeting_focus": decision.get("meeting_focus", "Optimized business transit"),
-                    "llm_enhanced": True,
-                }
-                session["intent"] = intent
-                session["destination"] = " ➔ ".join(clean_cities)
-                session["budget"] = intent["budget"]
-                session["days"] = intent["days"]
-                session["cities"] = clean_cities
-                await execute_itinerary_search(ctx, sender, session)
-                return
+        from src.services.llm_service import route_and_reason_query, evaluate_travel_context_fallback
+        decision = route_and_reason_query(user_text, session_context=session)
+        if not decision:
+            decision = evaluate_travel_context_fallback(user_text, session_context=session)
+
+        if decision.get("intent") == "conversational_qa" and decision.get("reply"):
+            ctx.logger.info("🧠 [LLM Reasoner] Handled query as conversational travel advisory")
+            await ctx.send(sender, create_chat_message(decision["reply"]))
+            return
+
+        elif decision.get("intent") == "ask_clarification":
+            ctx.logger.info(f"❓ [Context Reasoner] Gathering missing parameters: {decision.get('missing_fields')}")
+            ext = decision.get("extracted", {})
+            if ext.get("origin"):
+                session["origin"] = ext["origin"]
+            if ext.get("cities"):
+                session["destination"] = " ➔ ".join(ext["cities"])
+                session["cities"] = ext["cities"]
+            if ext.get("travel_time"):
+                session["travel_time"] = ext["travel_time"]
+            if ext.get("budget"):
+                session["budget"] = float(ext["budget"])
+            if ext.get("days"):
+                session["days"] = int(ext["days"])
+
+            reply_text = decision.get("reply", "Please provide more details about where you live, where you want to go, what time you plan to travel, and your budget.")
+            budget_str = str(int(session.get("budget", 1500.0))) if session.get("budget") else "1500"
+            form_card = build_preference_form_card(
+                session.get("origin", ""),
+                session.get("destination", ""),
+                max_budget=budget_str,
+            )
+            await ctx.send(sender, create_chat_message(reply_text, form_card))
+            return
+
+        elif decision.get("intent") == "plan_itinerary":
+            ctx.logger.info(f"🧠 [LLM Reasoner] Context complete! Handled query as multi-agent itinerary request for {decision.get('cities')}")
+            clean_cities = [c.strip().title() for c in decision.get("cities", []) if isinstance(c, str)]
+            if not clean_cities:
+                clean_cities = [session.get("destination") or "San Francisco"]
+
+            origin_city = decision.get("origin") or session.get("origin", "")
+            travel_time_val = decision.get("travel_time") or session.get("travel_time", "")
+            budget_val = float(decision.get("budget") or session.get("budget", 1500.0))
+            days_val = int(decision.get("days") or session.get("days", 3))
+
+            intent = {
+                "origin": origin_city,
+                "cities": clean_cities,
+                "is_multi_city": len(clean_cities) > 1,
+                "travel_time": travel_time_val,
+                "days": days_val,
+                "budget": budget_val,
+                "is_business": bool(decision.get("is_business", True)),
+                "meeting_focus": decision.get("meeting_focus", "Optimized business transit"),
+                "llm_enhanced": True,
+            }
+            session["intent"] = intent
+            session["origin"] = origin_city
+            session["destination"] = " ➔ ".join(clean_cities)
+            session["budget"] = budget_val
+            session["days"] = days_val
+            session["cities"] = clean_cities
+            session["travel_time"] = travel_time_val
+            await execute_itinerary_search(ctx, sender, session)
+            return
     except Exception as exc:
         ctx.logger.warning(f"LLM reasoner notice: {exc}")
 
