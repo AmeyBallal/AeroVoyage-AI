@@ -151,6 +151,18 @@ async def handle_chat_message(ctx: Context, sender: str, msg: ChatMessage):
         elif isinstance(item, TextContent):
             user_text = item.text.strip()
             ctx.logger.info(f"📝 [User Query] '{user_text}' from {sender}")
+
+            # 1. Handle ASI:One Card Actions delivered as JSON text
+            if (user_text.startswith("{") and user_text.endswith("}")) or '"action"' in user_text:
+                try:
+                    maybe_action = json.loads(user_text)
+                    if isinstance(maybe_action, dict) and "action" in maybe_action:
+                        ctx.logger.info(f"🎯 Recognized JSON Card Action from text: {maybe_action.get('action')}")
+                        await handle_interactive_card_action(ctx, sender, session, {"selection": maybe_action})
+                        continue
+                except Exception:
+                    pass
+
             await handle_user_text_intent(ctx, sender, session, user_text)
 
         # D. End Session
@@ -191,8 +203,8 @@ async def handle_interactive_card_action(
         await execute_itinerary_search(ctx, sender, session)
 
     # Action 2: User selected an option from the Carousel Card
-    elif action == "select_package":
-        package_id = selection.get("package_id")
+    elif action in ("select_package", "inspect_package"):
+        package_id = selection.get("package_id") or selection.get("pkg_id")
         travel_data = session.get("last_travel_data")
 
         selected_pkg = None
@@ -225,7 +237,7 @@ async def handle_interactive_card_action(
         await ctx.send(sender, create_chat_message(msg_text, detail_card))
 
     # Action 3: User clicked "Proceed to Booking Authorization" on Detail Card
-    elif action == "proceed_to_review":
+    elif action in ("proceed_to_review", "proceed_review"):
         pkg = session.get("selected_package")
         if not pkg and session.get("last_travel_data"):
             pkg = session["last_travel_data"]["packages"][0]
@@ -242,9 +254,9 @@ async def handle_interactive_card_action(
             await ctx.send(sender, create_chat_message(msg_text, review_card))
 
     # Action 4: User approved & clicked "Authorize & Lock Escrow" on Review Card
-    elif action == "confirm_escrow_payment":
+    elif action in ("confirm_escrow_payment", "lock_escrow"):
         pkg = session.get("selected_package")
-        amount_fet = selection.get("amount_fet", 0.0)
+        amount_fet = selection.get("amount_fet") or selection.get("amount", 0.0)
 
         # Dispatch settlement request to Settlement & Escrow Agent
         ctx.logger.info(f"💎 [Concierge] Dispatching escrow lock to Settlement Agent ({SETTLEMENT_ADDRESS})")

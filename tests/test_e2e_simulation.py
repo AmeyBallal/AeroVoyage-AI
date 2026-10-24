@@ -236,6 +236,61 @@ class TestEndToEndSimulation(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(receipt_card.is_terminal)
         self.assertIn("AV-CONFIRM-9901", receipt_chat.content[0].text)
 
+    async def test_asi_one_json_text_card_action(self):
+        """Tests that when ASI:One sends a card action as JSON text inside TextContent,
+        the agent parses it as a card selection instead of treating it as an NLP query.
+        """
+        ctx = MockContext()
+        user_address = "agent1_mock_asi_one_json_text_user"
+
+        # 1. First user asks for San Francisco trip
+        search_msg = ChatMessage(
+            timestamp=datetime.now(timezone.utc),
+            msg_id=uuid4(),
+            content=[TextContent(type="text", text="Plan a 3-day executive trip to San Francisco under $1500")],
+        )
+        await handle_chat_message(ctx, user_address, search_msg)
+
+        # 2. Simulate Logistics response with San Francisco packages
+        itinerary_data = generate_itinerary_packages(
+            origin="New York",
+            destination="San Francisco",
+            departure_date="2026-11-20",
+            return_date="2026-11-23",
+            max_budget_usd=1500.0,
+        )
+        logistics_resp = QueryItineraryResponse(
+            session_id=user_address,
+            success=True,
+            data_json=json.dumps(itinerary_data),
+        )
+        await handle_logistics_response(ctx, LOGISTICS_ADDRESS, logistics_resp)
+
+        # Verify carousel was presented
+        dest, carousel_chat = ctx.sent_messages[-1]
+        self.assertIn("San Francisco", carousel_chat.content[0].text)
+
+        # 3. User clicks card action in ASI:One, which sends JSON text:
+        ctx.sent_messages.clear()
+        json_card_click = ChatMessage(
+            timestamp=datetime.now(timezone.utc),
+            msg_id=uuid4(),
+            content=[TextContent(type="text", text='{"action":"select_package","pkg_id":"pkg_val_03","approved":true}')],
+        )
+        await handle_chat_message(ctx, user_address, json_card_click)
+
+        # Should present DetailCard for San Francisco pkg_val_03, NOT Berlin-Zurich-Milan!
+        self.assertGreaterEqual(len(ctx.sent_messages), 2)
+        dest, detail_chat = ctx.sent_messages[-1]
+        self.assertEqual(dest, user_address)
+        self.assertIn("Detailed Breakdown", detail_chat.content[0].text)
+        detail_meta = detail_chat.content[1]
+        detail_card = cards.extract_card(detail_meta)
+        self.assertIsInstance(detail_card.payload, cards.DetailCardPayload)
+        # Check summary rows contain San Francisco
+        found_sf = any("San Francisco" in r.value for r in detail_card.payload.summary_rows)
+        self.assertTrue(found_sf)
+
 
 if __name__ == "__main__":
     unittest.main()

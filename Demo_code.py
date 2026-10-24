@@ -176,8 +176,8 @@ GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODELS = [
     os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
     "llama-3.1-8b-instant",
-    "llama3-70b-8192",
-    "llama3-8b-8192",
+    "llama-3.2-3b-preview",
+    "llama-3.2-1b-preview",
 ]
 
 
@@ -565,6 +565,87 @@ _AGENT_FEE_FET = float(os.getenv("AGENT_FEE_FET", "5.0"))
 
 
 # ---------------------------------------------------------------------------
+# Card Action Processing Engine (Handles both Metadata & JSON Text Actions)
+# ---------------------------------------------------------------------------
+async def process_card_action(ctx: Context, sender: str, session: Dict[str, Any], sel: Dict[str, Any]):
+    action = sel.get("action")
+    ctx.logger.info(f"🎯 Processing card action: '{action}' with data: {sel}")
+
+    if action == "search":
+        dest_input = sel.get("destination", session.get("destination", "Berlin, Zurich, Milan"))
+        intent = parse_user_intent(dest_input)
+        if "max_budget" in sel:
+            try:
+                intent["budget"] = float(sel["max_budget"])
+            except ValueError:
+                pass
+        session["intent"] = intent
+        session["destination"] = " ➔ ".join(intent["cities"])
+        data = build_dynamic_travel_packages(intent)
+        session["data"] = data
+        carousel = make_carousel_card(data)
+        await ctx.send(sender, make_chat(f"Here are your optimized itineraries for **{data['route_label']}**:", carousel))
+
+    elif action in ("select_package", "inspect_package"):
+        pkg_id = sel.get("pkg_id") or sel.get("package_id")
+        data = session.get("data")
+        if not data:
+            dest = session.get("destination") or "San Francisco"
+            intent = parse_user_intent(dest)
+            data = build_dynamic_travel_packages(intent)
+            session["data"] = data
+        pkg = next((p for p in data["packages"] if p["id"] == pkg_id), data["packages"][0])
+        session["selected"] = pkg
+        detail = make_detail_card(pkg, data)
+        await ctx.send(sender, make_chat(f"📋 **Full Itinerary Summary Card: {pkg['title']}**\n\nFastest transit connections, meeting buffers, and hotel stays:", detail))
+
+    elif action in ("proceed_review", "proceed_to_review"):
+        data = session.get("data")
+        pkg = session.get("selected")
+        if not pkg and data and data.get("packages"):
+            pkg = data["packages"][0]
+            session["selected"] = pkg
+        if not pkg:
+            dest = session.get("destination") or "San Francisco"
+            intent = parse_user_intent(dest)
+            data = build_dynamic_travel_packages(intent)
+            session["data"] = data
+            pkg = data["packages"][0]
+            session["selected"] = pkg
+
+        review = make_review_card(pkg, fee_fet=_AGENT_FEE_FET)
+        await ctx.send(sender, make_chat("Authorize booking & escrow lock via Fetch.ai Payment Protocol:", review))
+
+    elif action in ("lock_escrow", "confirm_escrow_payment"):
+        data = session.get("data")
+        pkg = session.get("selected")
+        if not pkg and data and data.get("packages"):
+            pkg = data["packages"][0]
+        if not pkg:
+            dest = session.get("destination") or "San Francisco"
+            intent = parse_user_intent(dest)
+            data = build_dynamic_travel_packages(intent)
+            pkg = data["packages"][0]
+
+        amount_fet = float(sel.get("amount_fet", pkg.get("price_fet", 5.0)))
+        tx_id = f"0x{uuid4().hex}"
+        pnr = f"AV-{uuid4().hex[:8].upper()}"
+        receipt = make_receipt_card(pkg, tx_id, pnr, amount_fet)
+        await ctx.send(sender, make_chat("🎉 Payment Settled! Your booking is secured on the Fetch.ai ledger:", receipt))
+
+    elif action in ("back_to_comparison", "back"):
+        data = session.get("data")
+        if data:
+            carousel = make_carousel_card(data)
+            await ctx.send(sender, make_chat("Curated options:", carousel))
+
+    elif action in ("restart", "restart_flow", "cancel_reservation"):
+        session["selected"] = None
+        card = make_form_card(session["origin"], session["destination"])
+        await ctx.send(sender, make_chat("Plan your next trip with AeroVoyage:", card))
+
+
+# ---------------------------------------------------------------------------
 # Chat Protocol Message Routing
 # ---------------------------------------------------------------------------
 @chat_proto.on_message(ChatAcknowledgement)
@@ -600,70 +681,27 @@ async def handle_chat(ctx: Context, sender: str, msg: ChatMessage):
             card = make_form_card(session["origin"], session["destination"])
             await ctx.send(sender, make_chat(welcome, card))
 
-        # Interactive Card Response
+        # Interactive Card Response (Native Metadata)
         elif isinstance(item, MetadataContent):
             card_resp = cards.extract_card_response(item)
-            if not card_resp:
-                continue
+            if card_resp and card_resp.selection:
+                await process_card_action(ctx, sender, session, card_resp.selection)
 
-            sel = card_resp.selection or {}
-            action = sel.get("action")
-
-            if action == "search":
-                dest_input = sel.get("destination", session.get("destination", "Berlin, Zurich, Milan"))
-                intent = parse_user_intent(dest_input)
-                if "max_budget" in sel:
-                    try:
-                        intent["budget"] = float(sel["max_budget"])
-                    except ValueError:
-                        pass
-                session["intent"] = intent
-                session["destination"] = " ➔ ".join(intent["cities"])
-                data = build_dynamic_travel_packages(intent)
-                session["data"] = data
-                carousel = make_carousel_card(data)
-                await ctx.send(sender, make_chat(f"Here are your optimized itineraries for **{data['route_label']}**:", carousel))
-
-            elif action == "select_package":
-                pkg_id = sel.get("pkg_id")
-                data = session.get("data")
-                if not data:
-                    intent = parse_user_intent(session.get("destination", "Berlin, Zurich, Milan"))
-                    data = build_dynamic_travel_packages(intent)
-                    session["data"] = data
-                pkg = next((p for p in data["packages"] if p["id"] == pkg_id), data["packages"][0])
-                session["selected"] = pkg
-                detail = make_detail_card(pkg, data)
-                await ctx.send(sender, make_chat(f"📋 **Full Itinerary Summary Card: {pkg['title']}**\n\nFastest transit connections, meeting buffers, and hotel stays:", detail))
-
-            elif action == "proceed_review":
-                pkg = session.get("selected") or session["data"]["packages"][0]
-                review = make_review_card(pkg, fee_fet=_AGENT_FEE_FET)
-                await ctx.send(sender, make_chat("Authorize booking & escrow lock via Fetch.ai Payment Protocol:", review))
-
-            elif action == "lock_escrow":
-                pkg = session.get("selected") or session["data"]["packages"][0]
-                amount_fet = float(sel.get("amount_fet", 5.0))
-                tx_id = f"0x{uuid4().hex}"
-                pnr = f"AV-{uuid4().hex[:8].upper()}"
-                receipt = make_receipt_card(pkg, tx_id, pnr, amount_fet)
-                await ctx.send(sender, make_chat("Payment Settled! Your booking is secured on the Fetch.ai ledger:", receipt))
-
-            elif action == "back_to_comparison":
-                data = session.get("data")
-                if data:
-                    carousel = make_carousel_card(data)
-                    await ctx.send(sender, make_chat("Curated options:", carousel))
-
-            elif action == "restart":
-                session["selected"] = None
-                card = make_form_card(session["origin"], session["destination"])
-                await ctx.send(sender, make_chat("Plan your next trip with AeroVoyage:", card))
-
-        # Plain Text from ASI:One user
+        # Plain Text from ASI:One user (or Card Action encoded as JSON text)
         elif isinstance(item, TextContent):
             user_text = item.text.strip()
             ctx.logger.info(f"User query received: {user_text}")
+
+            # 1. CRITICAL: Handle ASI:One Card Actions delivered as JSON text
+            if (user_text.startswith("{") and user_text.endswith("}")) or '"action"' in user_text:
+                try:
+                    maybe_action = json.loads(user_text)
+                    if isinstance(maybe_action, dict) and "action" in maybe_action:
+                        ctx.logger.info(f"🎯 Recognized JSON Card Action from text: {maybe_action.get('action')}")
+                        await process_card_action(ctx, sender, session, maybe_action)
+                        continue
+                except Exception:
+                    pass
 
             # Check if this is a general conversational Q&A (not a trip planning query)
             lower_query = user_text.lower()

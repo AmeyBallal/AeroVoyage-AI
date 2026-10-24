@@ -22,8 +22,8 @@ logger = logging.getLogger("AeroVoyage.LLM")
 FREE_TIER_MODELS = [
     os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
     "llama-3.1-8b-instant",
-    "llama3-70b-8192",
-    "llama3-8b-8192",
+    "llama-3.2-3b-preview",
+    "llama-3.2-1b-preview",
 ]
 GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
 
