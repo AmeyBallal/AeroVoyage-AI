@@ -32,13 +32,20 @@ from uagents_core.contrib.protocols.chat import (
     cards,
 )
 
+import os
+
 # ---------------------------------------------------------------------------
 # Agent Configuration
 # ---------------------------------------------------------------------------
+AGENT_SEED = os.getenv(
+    "AGENT_SEED_PHRASE",
+    "aerovoyage_standalone_concierge_hackathon_seed_2026",
+)
+
 agent = Agent(
     name="aerovoyage_standalone_concierge",
-    seed="aerovoyage_standalone_concierge_hackathon_seed_2026",
-    port=8000,
+    seed=AGENT_SEED,
+    port=int(os.getenv("AGENT_PORT", "8000")),
     mailbox=True,  # Enables seamless Agentverse Mailbox connectivity
 )
 
@@ -414,10 +421,40 @@ async def handle_chat(ctx: Context, sender: str, msg: ChatMessage):
 
 agent.include(chat_proto, publish_manifest=True)
 
+import sys
+
+# Ensure UTF-8 output on Windows terminals
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 if __name__ == "__main__":
+    agentverse_key = os.getenv("AGENTVERSE_KEY")
+    if agentverse_key:
+        try:
+            from uagents_core.utils.registration import (
+                register_chat_agent,
+                RegistrationRequestCredentials,
+            )
+            inspector_url = f"https://agentverse.ai/inspect/?uri=http%3A//127.0.0.1%3A{agent.port}&address={agent.address}"
+            register_chat_agent(
+                "AeroVoyage Concierge",
+                inspector_url,
+                active=True,
+                credentials=RegistrationRequestCredentials(
+                    agentverse_api_key=agentverse_key,
+                    agent_seed_phrase=AGENT_SEED,
+                ),
+            )
+            print("[AeroVoyage] Auto-registered chat agent with Agentverse successfully!")
+        except Exception as reg_err:
+            print(f"[AeroVoyage] Agentverse registration notice: {reg_err}")
+
     try:
         fund_agent_if_low(agent.wallet.address())
     except Exception as e:
         print(f"Faucet funding notice: {e}")
-    print(f"✈️ AeroVoyage Standalone Concierge active at address: {agent.address}")
+    print(f"[AeroVoyage] Standalone Concierge active at address: {agent.address}")
     agent.run()
